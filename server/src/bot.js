@@ -35,6 +35,20 @@ const getQuotePayload = (message) => {
   };
 };
 
+const getReplyPayload = (message, replyText, quote) => {
+  const senderName = message?.data?.dName?.trim();
+  const senderId = message?.data?.uidFrom;
+  if (!senderName || !senderId) return quote ? { msg: replyText, quote } : replyText;
+
+  const mentionText = `@${senderName}`;
+  const msg = `${replyText} ${mentionText}`;
+  return {
+    msg,
+    mentions: [{ pos: replyText.length + 1, uid: String(senderId), len: mentionText.length }],
+    ...(quote ? { quote } : {}),
+  };
+};
+
 export class ZaloReplyBot {
   constructor({
     allowedGroupIds,
@@ -167,7 +181,7 @@ export class ZaloReplyBot {
     }
 
     const quote = getQuotePayload(message);
-    const payload = quote ? { msg: this.replyText, quote } : this.replyText;
+    const payload = getReplyPayload(message, this.replyText, quote);
     const networkStartedAt = performance.now();
 
     // Calling the async function starts request preparation synchronously up to its first await.

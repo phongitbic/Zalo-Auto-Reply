@@ -53,6 +53,36 @@ test("dispatches an eligible reply synchronously without waiting for network com
   assert.equal(bot.stats.sent, 1);
 });
 
+test("mentions the sender in the reply", () => {
+  let sentPayload;
+  const bot = new ZaloReplyBot({
+    allowedGroupIds: new Set(["group-1"]),
+    replyText: "Ok",
+    sessionFile: "unused",
+  });
+  bot.api = {
+    sendMessage: (payload) => {
+      sentPayload = payload;
+      return Promise.resolve();
+    },
+  };
+
+  bot.onMessage(makeMessage({
+    data: {
+      msgId: "message-with-sender",
+      content: "Tpbn - cau giay 200k",
+      uidFrom: "user-khanh",
+      dName: "Khánh",
+    },
+  }));
+
+  assert.equal(sentPayload.msg, "Ok @Khánh");
+  assert.deepEqual(sentPayload.mentions, [
+    { pos: 3, uid: "user-khanh", len: 6 },
+  ]);
+  assert.equal(sentPayload.quote.uidFrom, "user-khanh");
+});
+
 test("deduplicates before scanning priority locations", () => {
   const bot = new ZaloReplyBot({
     allowedGroupIds: new Set(["group-1"]),
