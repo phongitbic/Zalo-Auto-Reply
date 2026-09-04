@@ -1,9 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { Agent, fetch as undiciFetch } from "undici";
 import { LoginQRCallbackEventType, ThreadType, Zalo } from "zca-js";
 import { RecentMessageCache } from "./recent-message-cache.js";
-import { matchesPriorityLocation } from "./priority-locations.js";
-import { getActiveLocations, summarizePriorityRoutes } from "./priority-routes.js";
+import {
+  compilePriorityRoutes,
+  getPriorityRouteStats,
+  matchPriorityRoute,
+  normalizeLocation,
+  summarizePriorityRoutes,
+} from "./priority-routes.js";
 
 const getMessageId = (message) =>
   message.data?.msgId ?? message.data?.cliMsgId ?? message.data?.globalMsgId;
@@ -13,6 +20,13 @@ const getTextContent = (message) => {
   if (typeof content === "string") return content;
   if (!content || typeof content !== "object") return "";
   return content.text ?? content.msg ?? content.body ?? "";
+};
+
+const getSenderId = (message) => message?.data?.uidFrom ?? message?.data?.fromUid;
+const getSenderName = (message) => {
+  const value = [message?.data?.dName, message?.data?.displayName, message?.data?.senderName]
+    .find((item) => typeof item === "string" && item.trim());
+  return value?.trim() ?? "";
 };
 
 export const containsOkWord = (text) => /(^|[^a-z0-9])ok(?=$|[^a-z0-9])/i.test(String(text));
@@ -34,8 +48,8 @@ const getQuotePayload = (message) => {
 };
 
 const getReplyPayload = (message, replyText, quote) => {
-  const senderName = message?.data?.dName?.trim();
-  const senderId = message?.data?.uidFrom;
+  const senderName = getSenderName(message);
+  const senderId = getSenderId(message);
   if (!senderName || !senderId) return quote ? { msg: replyText, quote } : replyText;
 
   const mentionText = `@${senderName}`;
@@ -47,53 +61,110 @@ const getReplyPayload = (message, replyText, quote) => {
   };
 };
 
+const getGroupName = (message, threadId) =>
+  message?.data?.groupName ?? message?.data?.groupTopic ?? `Nhóm ${threadId}`;
+
 export class ZaloReplyBot {
   constructor({
     allowedGroupIds,
     replyText,
     sessionFile,
+    qrFile,
+    enabled = true,
     priorityOnly = false,
     priorityLocations = [],
     priorityRoutes = [],
     hotPathLogging = false,
     keepAliveIntervalMs = 15000,
+    httpConnections = 4,
+    keepAliveRequestTimeoutMs = 5000,
+    httpRequestTimeoutMs = 30000,
+    reconnectBaseDelayMs = 1000,
+    reconnectMaxDelayMs = 30000,
+    recentMessages = [],
+    configUpdatedAt = null,
     emit = () => {},
   }) {
     this.allowedGroupIds = allowedGroupIds;
     this.replyText = replyText;
     this.sessionFile = sessionFile;
+    this.qrFile = qrFile;
     this.priorityOnly = priorityOnly;
     this.priorityRoutes = priorityRoutes;
-    this.priorityLocations = priorityRoutes.length ? getActiveLocations(priorityRoutes) : priorityLocations;
+    this.compiledPriorityRoutes = compilePriorityRoutes(priorityRoutes);
+    this.priorityLocations = priorityLocations;
     this.hotPathLogging = hotPathLogging;
     this.keepAliveIntervalMs = keepAliveIntervalMs;
+    this.keepAliveRequestTimeoutMs = keepAliveRequestTimeoutMs;
+    this.httpRequestTimeoutMs = httpRequestTimeoutMs;
     this.keepAliveTimer = null;
     this.keepAliveInFlight = false;
+    this.reconnectBaseDelayMs = reconnectBaseDelayMs;
+    this.reconnectMaxDelayMs = reconnectMaxDelayMs;
+    this.reconnectAttempts = 0;
+    this.reconnectTimer = null;
+    this.shuttingDown = false;
+    this.httpAgent = new Agent({
+      connections: httpConnections,
+      pipelining: 1,
+      keepAliveTimeout: 60000,
+      keepAliveMaxTimeout: 600000,
+    });
+    this.httpFetch = (url, options = {}) => {
+      const { agent: _unusedAgent, ...fetchOptions } = options;
+      const timeoutMs = String(url).includes("/keepalive")
+        ? this.keepAliveRequestTimeoutMs
+        : this.httpRequestTimeoutMs;
+      return undiciFetch(url, {
+        ...fetchOptions,
+        dispatcher: this.httpAgent,
+        signal: fetchOptions.signal ?? AbortSignal.timeout(timeoutMs),
+      });
+    };
     this.emit = emit;
     this.api = null;
-    this.enabled = true;
+    this.enabled = enabled;
+    this.qrAvailable = false;
     this.status = "offline";
     this.stats = {
       received: 0,
       sent: 0,
       failed: 0,
       prioritySkipped: 0,
+      lastNormalizationMs: null,
+      lastRouteMatchMs: null,
       lastDispatchMs: null,
       lastNetworkMs: null,
       lastLatencyMs: null,
     };
+    this.redis = { status: "disabled", connected: false, version: 0, lastSyncedAt: null, error: null };
+    this.configUpdatedAt = configUpdatedAt;
     this.seen = new RecentMessageCache();
+    for (const item of recentMessages) {
+      if (item?.groupId && item?.messageId) {
+        this.seen.hasOrAdd(`${item.groupId}:${item.messageId}`);
+      }
+    }
+    this.groupNames = new Map();
   }
 
   snapshot() {
+    const priorityRouteStats = getPriorityRouteStats(this.priorityRoutes);
     return {
       enabled: this.enabled,
       status: this.status,
       groupsConfigured: this.allowedGroupIds.size,
       replyText: this.replyText,
+      mode: this.priorityOnly ? "priority" : "all",
+      acceptanceState: this.enabled ? "running" : "stopped",
+      operationMode: this.enabled ? (this.priorityOnly ? "PRIORITY" : "ALL") : "STOPPED",
+      qrAvailable: this.qrAvailable,
       priorityOnly: this.priorityOnly,
-      priorityLocationsConfigured: this.priorityLocations.length,
+      priorityLocationsConfigured: this.compiledPriorityRoutes.locationTerms.length,
       priorityRoutes: summarizePriorityRoutes(this.priorityRoutes),
+      priorityRouteStats,
+      redis: this.redis,
+      configUpdatedAt: this.configUpdatedAt,
       stats: this.stats,
     };
   }
@@ -103,39 +174,67 @@ export class ZaloReplyBot {
   }
 
   async start() {
+    if (this.shuttingDown) return;
     if (this.status === "connecting" || this.status === "online") return;
     this.status = "connecting";
     this.publish();
 
     try {
-      // Update checks and library logs are unnecessary on the latency-sensitive bot process.
-      const zalo = new Zalo({ logging: false, checkUpdate: false });
-      this.api = await this.login(zalo);
-      this.api.listener.on("message", (message) => this.onMessage(message));
-      this.api.listener.on("connected", () => {
+      const zalo = new Zalo({ logging: false, checkUpdate: false, polyfill: this.httpFetch });
+      const api = await this.login(zalo);
+      if (this.shuttingDown) return;
+      this.api = api;
+      api.listener.on("message", (message) => this.onMessage(message));
+      api.listener.on("connected", () => {
+        if (api !== this.api) return;
+        this.reconnectAttempts = 0;
+        this.qrAvailable = false;
         this.status = "online";
         this.publish();
+        void this.refreshGroupNames();
       });
-      this.api.listener.on("disconnected", () => {
+      api.listener.on("disconnected", () => {
+        if (api !== this.api || this.shuttingDown) return;
         this.status = "reconnecting";
         this.publish();
       });
-      this.api.listener.on("closed", () => {
+      api.listener.on("closed", () => {
+        if (api !== this.api || this.shuttingDown) return;
         this.status = "offline";
         this.publish();
+        this.scheduleReconnect();
       });
-      this.api.listener.on("error", (error) => {
+      api.listener.on("error", (error) => {
+        if (api !== this.api || this.shuttingDown) return;
         console.error("ZCA listener error:", error);
         this.status = "error";
         this.publish();
       });
-      this.api.listener.start({ retryOnClose: true });
+      api.listener.start({ retryOnClose: true });
       this.startKeepAlive();
     } catch (error) {
       this.status = "error";
       this.publish();
+      this.scheduleReconnect();
       throw error;
     }
+  }
+
+  scheduleReconnect() {
+    if (this.shuttingDown || this.reconnectTimer) return;
+
+    const delay = Math.min(
+      this.reconnectBaseDelayMs * (2 ** this.reconnectAttempts),
+      this.reconnectMaxDelayMs
+    );
+    this.reconnectAttempts += 1;
+    this.status = "reconnecting";
+    this.publish();
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.start().catch((error) => console.error("Zalo reconnect failed:", error.message));
+    }, delay);
+    this.reconnectTimer.unref?.();
   }
 
   startKeepAlive() {
@@ -163,6 +262,20 @@ export class ZaloReplyBot {
     this.keepAliveTimer = null;
   }
 
+  async stop() {
+    this.shuttingDown = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.stopKeepAlive();
+
+    const api = this.api;
+    this.api = null;
+    if (api?.listener) api.listener.stop();
+    await this.httpAgent.close();
+    this.status = "offline";
+    this.publish();
+  }
+
   async login(zalo) {
     try {
       const credentials = JSON.parse(await fs.readFile(this.sessionFile, "utf8"));
@@ -174,38 +287,119 @@ export class ZaloReplyBot {
       }
     }
 
-    return zalo.loginQR({ qrPath: "qr.png" }, async (event) => {
+    await fs.mkdir(path.dirname(this.qrFile), { recursive: true });
+    return zalo.loginQR({ qrPath: this.qrFile }, async (event) => {
       if (event.type === LoginQRCallbackEventType.QRCodeGenerated) {
         await event.actions.saveToFile();
+        await fs.chmod(this.qrFile, 0o600).catch(() => {});
+        this.qrAvailable = true;
+        this.status = "qr_required";
+        this.emit("qr", { available: true, updatedAt: new Date().toISOString() });
+        this.publish();
       }
       if (event.type === LoginQRCallbackEventType.QRCodeExpired) event.actions.retry();
       if (event.type === LoginQRCallbackEventType.GotLoginInfo) {
         await fs.mkdir(path.dirname(this.sessionFile), { recursive: true });
-        await fs.writeFile(this.sessionFile, JSON.stringify(event.data), { mode: 0o600 });
+        const tempSessionFile = `${this.sessionFile}.${process.pid}.${randomUUID()}.tmp`;
+        try {
+          await fs.writeFile(tempSessionFile, JSON.stringify(event.data), { mode: 0o600 });
+          await fs.rename(tempSessionFile, this.sessionFile);
+          await fs.chmod(this.sessionFile, 0o600).catch(() => {});
+        } finally {
+          await fs.unlink(tempSessionFile).catch((error) => {
+            if (error.code !== "ENOENT") throw error;
+          });
+        }
+        this.qrAvailable = false;
+        await fs.unlink(this.qrFile).catch((error) => {
+          if (error.code !== "ENOENT") throw error;
+        });
         console.log("ZCA session saved");
       }
     });
   }
 
+  async refreshGroupNames() {
+    if (!this.api || this.allowedGroupIds.size === 0) return;
+    try {
+      const response = await this.api.getGroupInfo([...this.allowedGroupIds]);
+      for (const [groupId, group] of Object.entries(response.gridInfoMap ?? {})) {
+        if (group?.name) this.groupNames.set(String(groupId), group.name);
+      }
+    } catch (error) {
+      if (this.hotPathLogging) console.warn("Loading Zalo group names failed:", error.message);
+    }
+  }
+
   onMessage(message) {
     const receivedAt = performance.now();
+    const receivedAtIso = new Date().toISOString();
     this.stats.received += 1;
     const threadId = String(message.threadId);
 
-    if (!this.enabled || message.isSelf || message.type !== ThreadType.Group) return;
+    if (message.isSelf || message.type !== ThreadType.Group) return;
     if (!this.allowedGroupIds.has(threadId)) return;
 
-    const incomingText = getTextContent(message).trim();
-    if (containsOkWord(incomingText)) return;
-
-    // Dedupe before text normalization and location scanning.
     const messageId = getMessageId(message);
-    const dedupeKey = `${threadId}:${messageId ?? JSON.stringify(message.data)}`;
-    if (this.seen.hasOrAdd(dedupeKey)) return;
-
-    if (this.priorityOnly && !matchesPriorityLocation(incomingText, this.priorityLocations)) {
-      this.stats.prioritySkipped += 1;
+    const decisionBase = {
+      messageId: messageId ? String(messageId) : null,
+      groupId: threadId,
+      senderId: getSenderId(message) ? String(getSenderId(message)) : null,
+      senderName: getSenderName(message),
+      receivedAt: receivedAtIso,
+    };
+    if (!this.enabled) {
+      this.emit("decision", { ...decisionBase, accepted: false, reason: "IGNORED_BOT_STOPPED" });
       return;
+    }
+    if (!messageId) {
+      this.emit("decision", { ...decisionBase, accepted: false, reason: "IGNORED_INVALID_MESSAGE" });
+      return;
+    }
+
+    const dedupeKey = `${threadId}:${messageId}`;
+    if (this.seen.hasOrAdd(dedupeKey)) {
+      this.emit("decision", { ...decisionBase, accepted: false, reason: "IGNORED_DUPLICATE" });
+      return;
+    }
+
+    const incomingText = getTextContent(message).trim();
+    if (!incomingText) {
+      this.emit("decision", { ...decisionBase, accepted: false, reason: "IGNORED_INVALID_MESSAGE" });
+      return;
+    }
+    if (containsOkWord(incomingText)) {
+      this.emit("decision", { ...decisionBase, accepted: false, reason: "IGNORED_INVALID_MESSAGE" });
+      return;
+    }
+
+    const acceptanceMode = this.priorityOnly ? "priority" : "all";
+    let matchedRoute = null;
+    let acceptedReason = "ACCEPTED_ALL";
+    let normalizationMs = 0;
+    let routeMatchMs = 0;
+    if (acceptanceMode === "priority") {
+      const normalizationStartedAt = performance.now();
+      const normalizedMessage = normalizeLocation(incomingText);
+      normalizationMs = Number((performance.now() - normalizationStartedAt).toFixed(3));
+      const routeMatchStartedAt = performance.now();
+      const result = matchPriorityRoute(normalizedMessage, this.compiledPriorityRoutes);
+      routeMatchMs = Number((performance.now() - routeMatchStartedAt).toFixed(3));
+      this.stats.lastNormalizationMs = normalizationMs;
+      this.stats.lastRouteMatchMs = routeMatchMs;
+      if (!result.accepted) {
+        this.stats.prioritySkipped += 1;
+        this.emit("decision", {
+          ...decisionBase,
+          accepted: false,
+          reason: result.reason,
+          matchedRoute: result.route ? `${result.route.origin} → ${result.route.destination}` : null,
+          timings: { normalizationMs, routeMatchMs },
+        });
+        return;
+      }
+      acceptedReason = result.reason;
+      matchedRoute = `${result.route.origin} → ${result.route.destination}`;
     }
 
     const quote = getQuotePayload(message);
@@ -213,42 +407,112 @@ export class ZaloReplyBot {
     const networkStartedAt = performance.now();
 
     // Calling the async function starts request preparation synchronously up to its first await.
-    const sendPromise = this.api.sendMessage(payload, message.threadId, ThreadType.Group);
-    this.stats.lastDispatchMs = Number((performance.now() - receivedAt).toFixed(3));
+    const reportFailure = (error) => {
+      this.seen.delete(dedupeKey);
+      this.stats.failed += 1;
+      console.error(`Send failed for group ${threadId}:`, error);
+      this.emit("ORDER_FAILED", {
+        eventId: randomUUID(),
+        ...decisionBase,
+        groupName: this.groupNames.get(threadId) ?? getGroupName(message, threadId),
+        originalContent: incomingText,
+        mode: acceptanceMode,
+        matchedRoute,
+        failedAt: new Date().toISOString(),
+        latencyMs: Math.round(performance.now() - receivedAt),
+        status: "failed",
+        error: error?.message ?? String(error),
+      });
+      this.emit("decision", { ...decisionBase, accepted: false, reason: "SEND_FAILED", matchedRoute });
+      this.publish();
+    };
+
+    let sendPromise;
+    try {
+      sendPromise = Promise.resolve(this.api.sendMessage(payload, message.threadId, ThreadType.Group));
+    } catch (error) {
+      reportFailure(error);
+      return;
+    }
+    const dispatchMs = Number((performance.now() - receivedAt).toFixed(3));
+    this.stats.lastDispatchMs = dispatchMs;
 
     sendPromise
       .then(() => {
         const completedAt = performance.now();
+        const networkMs = Number((completedAt - networkStartedAt).toFixed(3));
+        const latencyMs = Number((completedAt - receivedAt).toFixed(3));
         this.stats.sent += 1;
-        this.stats.lastNetworkMs = Math.round(completedAt - networkStartedAt);
-        this.stats.lastLatencyMs = Math.round(completedAt - receivedAt);
-        this.emit("activity", {
+        this.stats.lastNetworkMs = networkMs;
+        this.stats.lastLatencyMs = latencyMs;
+        const order = {
+          eventId: randomUUID(),
+          messageId: decisionBase.messageId,
+          orderId: message?.data?.orderId ?? null,
           groupId: threadId,
-          dispatchMs: this.stats.lastDispatchMs,
-          networkMs: this.stats.lastNetworkMs,
-          latencyMs: this.stats.lastLatencyMs,
-          at: new Date().toISOString(),
+          groupName: this.groupNames.get(threadId) ?? getGroupName(message, threadId),
+          senderId: decisionBase.senderId,
+          senderName: decisionBase.senderName,
+          originalContent: incomingText,
+          mode: acceptanceMode,
+          matchedRoute,
+          receivedAt: receivedAtIso,
+          processingStartedAt: receivedAtIso,
+          sentAt: new Date().toISOString(),
+          dispatchMs,
+          normalizationMs,
+          routeMatchMs,
+          networkMs,
+          totalMs: latencyMs,
+          latencyMs,
+          status: "success",
+        };
+        this.emit("ORDER_ACCEPTED", order);
+        this.emit("activity", { ...order, at: order.sentAt });
+        this.emit("decision", {
+          ...decisionBase,
+          accepted: true,
+          reason: acceptedReason,
+          matchedRoute,
+          timings: { normalizationMs, routeMatchMs, dispatchMs, networkMs, totalMs: latencyMs },
         });
         this.publish();
       })
-      .catch((error) => {
-        this.stats.failed += 1;
-        console.error(`Send failed for group ${threadId}:`, error);
-        this.publish();
-      });
+      .catch(reportFailure);
 
     if (this.hotPathLogging) {
-      console.log(`Dispatched reply for group ${threadId} in ${this.stats.lastDispatchMs} ms`);
+      console.log(`Dispatched reply for group ${threadId} in ${dispatchMs} ms`);
     }
   }
 
   setEnabled(enabled) {
     this.enabled = Boolean(enabled);
+    this.configUpdatedAt = new Date().toISOString();
     this.publish();
   }
 
   setPriorityOnly(enabled) {
     this.priorityOnly = Boolean(enabled);
+    this.configUpdatedAt = new Date().toISOString();
+    this.publish();
+  }
+
+  setMode(mode) {
+    if (!["all", "priority"].includes(mode)) throw new Error("Invalid acceptance mode");
+    this.priorityOnly = mode === "priority";
+    this.configUpdatedAt = new Date().toISOString();
+    this.publish();
+  }
+
+  setControl({
+    enabled = this.enabled,
+    mode = this.priorityOnly ? "priority" : "all",
+    updatedAt = new Date().toISOString(),
+  }) {
+    if (!["all", "priority"].includes(mode)) throw new Error("Invalid acceptance mode");
+    this.enabled = Boolean(enabled);
+    this.priorityOnly = mode === "priority";
+    this.configUpdatedAt = updatedAt;
     this.publish();
   }
 
@@ -259,7 +523,24 @@ export class ZaloReplyBot {
 
   setPriorityRoutes(routes) {
     this.priorityRoutes = routes;
-    this.priorityLocations = getActiveLocations(routes);
+    this.compiledPriorityRoutes = compilePriorityRoutes(routes);
+    this.configUpdatedAt = new Date().toISOString();
+    this.publish();
+  }
+
+  seedRecentMessages(items = []) {
+    for (const item of items) {
+      const key = typeof item === "string"
+        ? item
+        : item?.groupId && item?.messageId
+          ? `${item.groupId}:${item.messageId}`
+          : null;
+      if (key) this.seen.hasOrAdd(key);
+    }
+  }
+
+  setInfrastructureStatus(redis) {
+    this.redis = { ...this.redis, ...redis };
     this.publish();
   }
 }

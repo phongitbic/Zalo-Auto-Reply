@@ -20,4 +20,8 @@ export class RecentMessageCache {
       if (expiresAt <= now || this.items.size > this.maxSize) this.items.delete(key);
     }
   }
+
+  delete(key) {
+    this.items.delete(key);
+  }
 }

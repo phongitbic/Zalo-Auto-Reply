@@ -1,7 +1,15 @@
 node_modules/
 client/dist/
 server/.env
+.env
 data/
 qr.png
 .npm-cache/
 npm-debug.log*
+.android-sdk/
+.android-commandline-tools.zip
+.tmp-android-studio.html
+android/local.properties
+android/signing.properties
+*.jks
+*.keystore

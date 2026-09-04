@@ -7,5 +7,6 @@ module.exports = {
     autorestart: true,
     max_restarts: 10,
     restart_delay: 2000,
+    kill_timeout: 12000,
   }],
 };

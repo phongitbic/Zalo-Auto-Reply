@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Điều khiển nhận đơn</string>
+    <string name="title_activity_main">Điều khiển nhận đơn</string>
+    <string name="package_name">vn.zalo.autoreply</string>
+    <string name="custom_url_scheme">vn.zalo.autoreply</string>
+</resources>
