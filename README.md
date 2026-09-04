@@ -52,27 +52,34 @@ Các biến quan trọng nằm trong [server/.env.example](server/.env.example):
 - `MAX_SOCKET_CONNECTIONS`: giới hạn client đồng thời cho một instance.
 - `KEEP_ALIVE_INTERVAL_MS`: heartbeat Zalo, tối thiểu 5 giây.
 - `HTTP_CONNECTIONS`: số kết nối tối đa trong cùng HTTP Keep-Alive pool; mặc định 4 để heartbeat không chặn lệnh gửi.
-- `REDIS_URL`: địa chỉ Redis, mặc định `redis://127.0.0.1:6379`.
+- `REDIS_URL`: địa chỉ Redis 5, mặc định `redis://127.0.0.1:6379`; nếu có `requirepass` dùng `redis://:MAT_KHAU_URL_ENCODED@127.0.0.1:6379`.
 - `REDIS_PREFIX`: tiền tố khóa khi nhiều ứng dụng dùng chung Redis.
 - `REDIS_CHANNEL`: kênh Pub/Sub đồng bộ cấu hình, mặc định `priority_routes_updated`.
 - `REDIS_CONNECT_TIMEOUT_MS`: thời gian chờ mỗi lần mở socket Redis, mặc định 5 giây.
 - `REDIS_PING_INTERVAL_MS`: gửi PING định kỳ để NAT/firewall không cắt socket Redis nhàn rỗi, mặc định 10 giây.
 
-Redis là nguồn cấu hình chính thức. Trên Ubuntu 20.04, nên dùng kho gói chính thức của Redis rồi bật dịch vụ bằng systemd:
+Redis Server 5 được hỗ trợ trực tiếp bằng RESP2. Không cần nâng Redis chỉ để chạy ứng dụng này. Trên Ubuntu 20.04, cài và bật gói Redis của hệ điều hành:
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y lsb-release curl gpg
-curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
-sudo chmod 644 /usr/share/keyrings/redis-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
-sudo apt-get update
-sudo apt-get install -y redis
+sudo apt update
+sudo apt install -y redis-server
 sudo systemctl enable --now redis-server
 redis-cli -h 127.0.0.1 ping
+redis-cli -h 127.0.0.1 INFO server | grep redis_version
 ```
 
-`redis-cli` phải trả về `PONG`. Khi Redis và bot ở cùng VPS, giữ đúng `REDIS_URL=redis://127.0.0.1:6379`; không dùng IP công khai và không mở cổng 6379 ra Internet. Dùng `127.0.0.1` cũng tránh trường hợp `localhost` trỏ sang IPv6 trong khi Redis chỉ bind IPv4. Nếu Redis ở máy khác, dùng tài khoản/mật khẩu trong URL và `rediss://` cho TLS.
+Trong `/etc/redis/redis.conf`, cấu hình phù hợp khi Redis và bot cùng VPS là:
+
+```conf
+bind 127.0.0.1
+protected-mode yes
+port 6379
+timeout 0
+tcp-keepalive 60
+supervised systemd
+```
+
+Sau khi sửa, chạy `sudo systemctl restart redis-server`. `redis-cli` phải trả về `PONG`. Giữ `REDIS_URL=redis://127.0.0.1:6379`, không dùng IP công khai và không mở cổng 6379 ra Internet. Redis 5 chưa có ACL username; nếu đã bật `requirepass`, URL phải để trống username như ví dụ ở trên và mật khẩu chứa ký tự đặc biệt phải được URL-encode.
 
 Kiểm tra đúng toàn bộ nhóm lệnh và Pub/Sub mà ứng dụng cần bằng chính cấu hình trong `server/.env`:
 
@@ -84,7 +91,7 @@ npm run redis:check -w server
 pm2 logs zalo-auto-reply --lines 100
 ```
 
-Server cần Node.js `20.19.0` trở lên. `ECONNREFUSED` thường là dịch vụ chưa chạy hoặc sai host/cổng; `NOAUTH`/`WRONGPASS` là sai xác thực; `NOPERM` là tài khoản ACL thiếu quyền lệnh, khóa hoặc kênh Pub/Sub. Hệ thống dùng các khóa `zalo-auto-reply:bot:state`, `zalo-auto-reply:priority:routes`, `zalo-auto-reply:priority:config_version`, `zalo-auto-reply:processed:messages` và các khóa heartbeat theo tiến trình. Khi Redis tạm mất kết nối, bot tiếp tục dùng cấu hình gần nhất trong RAM và tự nối lại; mất riêng Pub/Sub không còn bị báo nhầm là mất kênh lệnh và bot tuyệt đối không tự chuyển từ `PRIORITY` sang `ALL`.
+Server cần Node.js `20.19.0` trở lên. `ECONNREFUSED` thường là dịch vụ chưa chạy hoặc sai host/cổng; `NOAUTH`/`WRONGPASS` là sai `requirepass`; lỗi `unknown command HELLO` cho biết tiến trình vẫn đang chạy code cũ chưa ép RESP2. Hệ thống chỉ dùng các lệnh có trong Redis 5: `GET`, `SET`, `DEL`, `INCR`, `MULTI/EXEC`, `ZADD`, `ZRANGEBYSCORE`, `ZREMRANGEBYSCORE`, `PING`, `PUBLISH` và `SUBSCRIBE`. Khi Redis tạm mất kết nối, bot tiếp tục dùng cấu hình gần nhất trong RAM và tự nối lại; mất riêng Pub/Sub không còn bị báo nhầm là mất kênh lệnh và bot tuyệt đối không tự chuyển từ `PRIORITY` sang `ALL`.
 
 Đặt Nginx hoặc Caddy trước cổng `3001` để cung cấp HTTPS/WSS. Android cố ý từ chối URL HTTP và manifest chặn cleartext traffic.
 

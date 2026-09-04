@@ -92,6 +92,7 @@ export class RedisCoordinator {
       commandConnected: false,
       subscriberConnected: false,
       server: url ? safeRedisTarget(url) : null,
+      protocol: "RESP2",
       version: 0,
       lastSyncedAt: null,
       error: null,
@@ -129,6 +130,7 @@ export class RedisCoordinator {
     });
     this.client = this.clientFactory({
       url: this.url,
+      RESP: 2,
       pingInterval: this.pingIntervalMs,
       socket: {
         connectTimeout: this.connectTimeoutMs,

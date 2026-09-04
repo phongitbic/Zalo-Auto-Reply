@@ -8,7 +8,7 @@ const socketOptions = {
   noDelay: true,
   reconnectStrategy: false,
 };
-const command = createClient({ url: config.redisUrl, socket: socketOptions });
+const command = createClient({ url: config.redisUrl, RESP: 2, socket: socketOptions });
 const subscriber = command.duplicate();
 command.on("error", () => {});
 subscriber.on("error", () => {});
@@ -48,15 +48,16 @@ try {
   ]);
   clearTimeout(pubSubTimer);
 
-  const ping = await command.ping();
+  const [ping, serverInfo] = await Promise.all([command.ping(), command.info("server")]);
   if (ping !== "PONG" || storedValue !== "ok" || sortedValues[0] !== "message" || transactionResult.at(-1) !== 1) {
     throw new Error("Redis returned an unexpected diagnostic result");
   }
-  console.log("Redis OK: command, transaction, sorted set and Pub/Sub are operational.");
+  const version = serverInfo.match(/^redis_version:([^\r\n]+)/m)?.[1] ?? "unknown";
+  console.log(`Redis ${version} OK via RESP2: command, transaction, sorted set and Pub/Sub are operational.`);
 } catch (error) {
   const code = error?.code ? `${error.code}: ` : "";
   console.error(`Redis check failed: ${code}${error?.message ?? String(error)}`);
-  console.error("Check redis-server, REDIS_URL, bind/protected-mode, password or ACL permissions.");
+  console.error("Check redis-server, REDIS_URL, bind/protected-mode or the Redis 5 requirepass password.");
   process.exitCode = 1;
 } finally {
   clearTimeout(pubSubTimer);

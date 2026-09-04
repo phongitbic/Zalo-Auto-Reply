@@ -151,12 +151,14 @@ test("keeps command health online when only the Pub/Sub connection drops", async
   await coordinator.start();
   await waitFor(() => syncCount === 1 && coordinator.snapshot().subscriberConnected);
   assert.equal(syncCount, 1);
+  assert.equal(clientOptions.RESP, 2);
   assert.equal(clientOptions.socket.connectTimeout, 4321);
   assert.equal(clientOptions.socket.keepAlive, true);
   assert.equal(clientOptions.socket.noDelay, true);
   assert.equal(clientOptions.pingInterval, 8765);
   assert.ok(clientOptions.socket.reconnectStrategy(20) <= 2099);
   assert.equal(coordinator.snapshot().server, "redis://127.0.0.1:6379/2");
+  assert.equal(coordinator.snapshot().protocol, "RESP2");
 
   const outage = Object.assign(new Error("subscriber unavailable"), { code: "ECONNRESET" });
   coordinator.subscriber.emit("error", outage);
