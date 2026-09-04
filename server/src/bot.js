@@ -19,10 +19,8 @@ export const containsOkWord = (text) => /(^|[^a-z0-9])ok(?=$|[^a-z0-9])/i.test(S
 
 const getQuotePayload = (message) => {
   const data = message?.data;
-  if (!data || typeof data !== "object") return undefined;
-
-  const msgId = data.msgId ?? data.cliMsgId ?? data.globalMsgId ?? data.id;
-  if (!msgId) return undefined;
+  const msgId = data?.msgId ?? data?.cliMsgId ?? data?.globalMsgId ?? data?.id;
+  if (!data || !msgId) return undefined;
 
   return {
     uidFrom: data.uidFrom ?? data.fromUid,
@@ -41,10 +39,10 @@ const getReplyPayload = (message, replyText, quote) => {
   if (!senderName || !senderId) return quote ? { msg: replyText, quote } : replyText;
 
   const mentionText = `@${senderName}`;
-  const msg = `${replyText} ${mentionText}`;
+  const msg = `${mentionText} ${replyText}`;
   return {
     msg,
-    mentions: [{ pos: replyText.length + 1, uid: String(senderId), len: mentionText.length }],
+    mentions: [{ pos: 0, uid: String(senderId), len: mentionText.length }],
     ...(quote ? { quote } : {}),
   };
 };
@@ -58,6 +56,7 @@ export class ZaloReplyBot {
     priorityLocations = [],
     priorityRoutes = [],
     hotPathLogging = false,
+    keepAliveIntervalMs = 15000,
     emit = () => {},
   }) {
     this.allowedGroupIds = allowedGroupIds;
@@ -67,6 +66,9 @@ export class ZaloReplyBot {
     this.priorityRoutes = priorityRoutes;
     this.priorityLocations = priorityRoutes.length ? getActiveLocations(priorityRoutes) : priorityLocations;
     this.hotPathLogging = hotPathLogging;
+    this.keepAliveIntervalMs = keepAliveIntervalMs;
+    this.keepAliveTimer = null;
+    this.keepAliveInFlight = false;
     this.emit = emit;
     this.api = null;
     this.enabled = true;
@@ -128,11 +130,37 @@ export class ZaloReplyBot {
         this.publish();
       });
       this.api.listener.start({ retryOnClose: true });
+      this.startKeepAlive();
     } catch (error) {
       this.status = "error";
       this.publish();
       throw error;
     }
+  }
+
+  startKeepAlive() {
+    if (this.keepAliveTimer) return;
+
+    const ping = async () => {
+      if (!this.api || this.keepAliveInFlight) return;
+      this.keepAliveInFlight = true;
+      try {
+        await this.api.keepAlive();
+      } catch (error) {
+        if (this.hotPathLogging) console.warn("Zalo keep-alive failed:", error.message);
+      } finally {
+        this.keepAliveInFlight = false;
+      }
+    };
+
+    void ping();
+    this.keepAliveTimer = setInterval(ping, this.keepAliveIntervalMs);
+    this.keepAliveTimer.unref?.();
+  }
+
+  stopKeepAlive() {
+    if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
+    this.keepAliveTimer = null;
   }
 
   async login(zalo) {

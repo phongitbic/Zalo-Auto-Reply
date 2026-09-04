@@ -26,6 +26,7 @@ const bot = new ZaloReplyBot({
   priorityLocations: config.priorityLocations,
   priorityRoutes: config.priorityRoutes,
   hotPathLogging: config.hotPathLogging,
+  keepAliveIntervalMs: config.keepAliveIntervalMs,
   emit: (event, payload) => io.emit(event, payload),
 });
 

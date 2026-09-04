@@ -53,7 +53,7 @@ test("dispatches an eligible reply synchronously without waiting for network com
   assert.equal(bot.stats.sent, 1);
 });
 
-test("mentions the sender in the reply", () => {
+test("quotes the message and mentions the sender before the reply", () => {
   let sentPayload;
   const bot = new ZaloReplyBot({
     allowedGroupIds: new Set(["group-1"]),
@@ -76,9 +76,9 @@ test("mentions the sender in the reply", () => {
     },
   }));
 
-  assert.equal(sentPayload.msg, "Ok @Khánh");
+  assert.equal(sentPayload.msg, "@Khánh Ok");
   assert.deepEqual(sentPayload.mentions, [
-    { pos: 3, uid: "user-khanh", len: 6 },
+    { pos: 0, uid: "user-khanh", len: 6 },
   ]);
   assert.equal(sentPayload.quote.uidFrom, "user-khanh");
 });
@@ -97,4 +97,25 @@ test("deduplicates before scanning priority locations", () => {
   bot.onMessage(message);
   bot.onMessage(message);
   assert.equal(bot.stats.prioritySkipped, 1);
+});
+
+test("starts one Zalo keep-alive request immediately without overlapping", async () => {
+  let calls = 0;
+  let finishRequest;
+  const pendingRequest = new Promise((resolve) => { finishRequest = resolve; });
+  const bot = new ZaloReplyBot({
+    allowedGroupIds: new Set(),
+    replyText: "Ok",
+    sessionFile: "unused",
+    keepAliveIntervalMs: 5000,
+  });
+  bot.api = { keepAlive: () => { calls += 1; return pendingRequest; } };
+
+  bot.startKeepAlive();
+  bot.startKeepAlive();
+  assert.equal(calls, 1);
+
+  bot.stopKeepAlive();
+  finishRequest();
+  await pendingRequest;
 });

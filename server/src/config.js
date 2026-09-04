@@ -50,4 +50,5 @@ export const config = {
   priorityRoutesFile,
   priorityRoutes: loadPriorityRoutes(priorityRoutesFile, priorityLocations),
   hotPathLogging: process.env.HOT_PATH_LOGGING === "true",
+  keepAliveIntervalMs: Math.max(5000, Number(process.env.KEEP_ALIVE_INTERVAL_MS) || 15000),
 };
