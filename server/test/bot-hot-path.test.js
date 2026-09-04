@@ -189,13 +189,17 @@ test("deduplicates recently accepted messages restored after a restart", () => {
   assert.equal(calls, 0);
 });
 
-test("deduplicates before scanning priority locations", () => {
+test("deduplicates before matching priority routes", () => {
   const bot = new ZaloReplyBot({
     allowedGroupIds: new Set(["group-1"]),
     replyText: "Ok",
     sessionFile: "unused",
     priorityOnly: true,
-    priorityLocations: ["thu duc"],
+    priorityRoutes: [createPriorityRoute({
+      id: "thu-duc-quan-7",
+      origin: "Thu Duc",
+      destination: "Quan 7",
+    })],
   });
   bot.api = { sendMessage: () => Promise.resolve() };
   const message = makeMessage({ data: { msgId: "duplicate", content: "Quan 7" } });

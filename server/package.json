@@ -5,8 +5,11 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "test": "node --test"
+    "test": "node --test",
+    "redis:check": "node scripts/check-redis.js",
+    "benchmark": "node scripts/benchmark-hot-path.js"
   },
+  "engines": { "node": ">=20.19.0" },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.2.2",

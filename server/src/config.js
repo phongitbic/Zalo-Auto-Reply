@@ -1,8 +1,6 @@
 import dotenv from "dotenv";
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parsePriorityLocations } from "./priority-locations.js";
 import { loadPriorityRoutes } from "./priority-routes.js";
 import { loadJsonFile } from "./persistent-json-store.js";
 
@@ -23,22 +21,6 @@ const splitIds = (value = "") =>
 const splitValues = (value = "") =>
   String(value).split(/[,;]+/).map((item) => item.trim()).filter(Boolean);
 
-const priorityLocationsFile = path.resolve(
-  currentDir,
-  "..",
-  process.env.PRIORITY_LOCATIONS_FILE || "data/priority-locations.txt"
-);
-
-const loadPriorityLocations = () => {
-  try {
-    return parsePriorityLocations(fs.readFileSync(priorityLocationsFile, "utf8"));
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-    return [];
-  }
-};
-
-const priorityLocations = loadPriorityLocations();
 const priorityRoutesFile = path.resolve(
   currentDir,
   "..",
@@ -70,10 +52,8 @@ export const config = {
   enabled: botState.enabled,
   mode: botState.mode,
   priorityOnly: botState.mode === "priority",
-  priorityLocations,
-  priorityLocationsFile,
   priorityRoutesFile,
-  priorityRoutes: loadPriorityRoutes(priorityRoutesFile, priorityLocations),
+  priorityRoutes: loadPriorityRoutes(priorityRoutesFile),
   hotPathLogging: process.env.HOT_PATH_LOGGING === "true",
   keepAliveIntervalMs: Math.max(5000, Number(process.env.KEEP_ALIVE_INTERVAL_MS) || 15000),
   httpConnections: Math.min(16, Math.max(1, Number(process.env.HTTP_CONNECTIONS) || 4)),
@@ -87,4 +67,6 @@ export const config = {
   redisPrefix: process.env.REDIS_PREFIX || "zalo-auto-reply",
   redisChannel: process.env.REDIS_CHANNEL || "priority_routes_updated",
   redisHeartbeatMs: Math.max(5000, Number(process.env.REDIS_HEARTBEAT_MS) || 15000),
+  redisConnectTimeoutMs: Math.max(1000, Number(process.env.REDIS_CONNECT_TIMEOUT_MS) || 5000),
+  redisPingIntervalMs: Math.max(1000, Number(process.env.REDIS_PING_INTERVAL_MS) || 10000),
 };

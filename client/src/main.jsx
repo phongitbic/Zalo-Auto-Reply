@@ -120,6 +120,8 @@ function App() {
         setNotice(error.message === "Unauthorized" ? "Token quản trị không đúng" : "Mất kết nối VPS");
       });
       socket.on("status", setStatus);
+      socket.on("stats", (stats) => setStatus((current) => current ? { ...current, stats } : current));
+      socket.on("redis", (redis) => setStatus((current) => current ? { ...current, redis } : current));
       socket.on("orders", (items) => setOrders(items || []));
       socket.on("ORDER_ACCEPTED", (order) => {
         setOrders((items) => [order, ...items.filter((item) => item.eventId !== order.eventId)].slice(0, 500));
@@ -411,12 +413,17 @@ function ConnectScreen({ serverUrl, setServerUrl, adminToken, setAdminToken, con
 function Dashboard({ status, todayCount, successfulOrders, busy, control }) {
   const latest = successfulOrders[0];
   const routeStats = status.priorityRouteStats || { enabled: 0, disabled: 0 };
+  const redis = status.redis || {};
+  const redisReady = redis.connected && redis.subscriberConnected !== false;
+  const redisLabel = !redis.connected
+    ? "Mất kết nối"
+    : redis.subscriberConnected === false ? "Lệnh ổn, đồng bộ đang nối lại" : "Đã kết nối";
   return <>
     <section className={`hero-status ${status.enabled ? "running" : "stopped"}`}><span className="eyebrow">TRẠNG THÁI BOT</span><h2>{modeText(status)}</h2><p>{status.mode === "priority" ? "Chỉ phản hồi cuốc khớp tuyến ưu tiên đang bật" : "Phản hồi tất cả tin hợp lệ trong nhóm đã chọn"}</p></section>
     <section className="mode-picker panel"><h3>Chọn chế độ</h3><button className={status.mode === "all" ? "selected" : ""} disabled={busy} onClick={() => void control(status.enabled ? "start" : "stop", "all")}><strong>Nhận tất cả</strong><span>Mọi cuốc xe hợp lệ</span></button><button className={status.mode === "priority" ? "selected" : ""} disabled={busy} onClick={() => void control(status.enabled ? "start" : "stop", "priority")}><strong>Cuốc ưu tiên</strong><span>Chỉ tuyến đang bật</span></button></section>
     <section className="action-grid"><button className="start large" disabled={busy || status.enabled} onClick={() => void control("start")}>START<br /><small>Bắt đầu nhận đơn</small></button><button className="stop large" disabled={busy || !status.enabled} onClick={() => void control("stop")}>STOP<br /><small>Dừng ngay lập tức</small></button></section>
     <section className="metrics"><article><strong>{todayCount}</strong><span>Đơn hôm nay</span></article><article><strong>{latest?.totalMs ?? latest?.latencyMs ?? "--"}</strong><span>Tốc độ gần nhất (ms)</span></article><article><strong>{routeStats.enabled}</strong><span>Tuyến đang bật</span></article><article><strong>{routeStats.disabled}</strong><span>Tuyến đang tắt</span></article></section>
-    <section className={`system-health panel ${status.redis?.connected ? "healthy" : "warning"}`}><div><strong>Redis: {status.redis?.connected ? "Đã kết nối" : "Mất kết nối"}</strong><span>{status.redis?.connected ? `Phiên bản ${status.redis.version}` : "Bot đang dùng cấu hình gần nhất trong RAM"}</span></div><div><strong>Cập nhật cấu hình</strong><span>{formatTime(status.configUpdatedAt || status.redis?.lastSyncedAt)}</span></div></section>
+    <section className={`system-health panel ${redisReady ? "healthy" : "warning"}`}><div><strong>Redis: {redisLabel}</strong><span>{redis.connected ? `Phiên bản ${redis.version}` : "Bot đang dùng cấu hình gần nhất trong RAM"}</span></div><div><strong>Cập nhật cấu hình</strong><span>{formatTime(status.configUpdatedAt || redis.lastSyncedAt)}</span></div></section>
   </>;
 }
 

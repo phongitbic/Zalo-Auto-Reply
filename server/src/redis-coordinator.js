@@ -9,6 +9,32 @@ const safeJson = (value, fallback) => {
   }
 };
 
+const reconnectDelay = (retries) =>
+  Math.min(100 * (2 ** Math.min(retries, 5)), 2000) + Math.floor(Math.random() * 100);
+
+const safeRedisTarget = (url) => {
+  try {
+    const parsed = new URL(url);
+    const database = parsed.pathname && parsed.pathname !== "/" ? parsed.pathname : "";
+    return `${parsed.protocol}//${parsed.host || `${parsed.hostname}:6379`}${database}`;
+  } catch {
+    return "configured";
+  }
+};
+
+const safeError = (error, url) => {
+  let message = error?.message ?? String(error);
+  try {
+    const parsed = new URL(url);
+    for (const secret of [parsed.username, parsed.password]) {
+      if (secret) message = message.replaceAll(secret, "***");
+    }
+  } catch {
+    // The URL itself is validated by node-redis; keep its parse error useful.
+  }
+  return message;
+};
+
 export const encodeBotState = ({ enabled, mode }, updatedAt = new Date().toISOString()) => ({
   operationMode: enabled ? (mode === "priority" ? "PRIORITY" : "ALL") : "STOPPED",
   lastActiveMode: mode === "priority" ? "PRIORITY" : "ALL",
@@ -36,6 +62,8 @@ export class RedisCoordinator {
     onStatus = () => {},
     clientFactory = createClient,
     heartbeatMs = 15000,
+    connectTimeoutMs = 5000,
+    pingIntervalMs = 10000,
     processedTtlMs = 24 * 60 * 60 * 1000,
   }) {
     this.url = url;
@@ -47,9 +75,13 @@ export class RedisCoordinator {
     this.onStatus = onStatus;
     this.clientFactory = clientFactory;
     this.heartbeatMs = heartbeatMs;
+    this.connectTimeoutMs = connectTimeoutMs;
+    this.pingIntervalMs = pingIntervalMs;
     this.processedTtlMs = processedTtlMs;
     this.client = null;
     this.subscriber = null;
+    this.subscriberSubscribed = false;
+    this.subscriberOperational = false;
     this.heartbeatTimer = null;
     this.stopping = false;
     this.syncPromise = Promise.resolve();
@@ -57,9 +89,14 @@ export class RedisCoordinator {
     this.state = {
       status: url ? "disconnected" : "disabled",
       connected: false,
+      commandConnected: false,
+      subscriberConnected: false,
+      server: url ? safeRedisTarget(url) : null,
       version: 0,
       lastSyncedAt: null,
       error: null,
+      errorCode: null,
+      lastErrorAt: null,
     };
     this.keys = {
       state: `${prefix}:bot:state`,
@@ -82,34 +119,112 @@ export class RedisCoordinator {
 
   async start() {
     if (!this.url || this.client || this.stopping) return;
-    this.updateStatus({ status: "connecting", connected: false, error: null });
-    this.client = this.clientFactory({ url: this.url });
+    this.updateStatus({
+      status: "connecting",
+      connected: false,
+      commandConnected: false,
+      subscriberConnected: false,
+      error: null,
+      errorCode: null,
+    });
+    this.client = this.clientFactory({
+      url: this.url,
+      pingInterval: this.pingIntervalMs,
+      socket: {
+        connectTimeout: this.connectTimeoutMs,
+        keepAlive: true,
+        noDelay: true,
+        reconnectStrategy: reconnectDelay,
+      },
+    });
     this.subscriber = this.client.duplicate();
-    this.bindClientEvents(this.client);
-    this.subscriber.on("error", (error) => this.handleError(error));
-    this.subscriber.on("reconnecting", () => this.updateStatus({ status: "reconnecting", connected: false }));
+    this.bindCommandClientEvents(this.client);
+    this.bindSubscriberEvents(this.subscriber);
 
     void this.client.connect()
-      .then(() => this.synchronize())
-      .catch((error) => this.handleError(error));
+      .catch((error) => this.handleError(error, "command"));
     void this.subscriber.connect()
       .then(() => this.subscriber.subscribe(this.channel, (message) => this.handlePublishedUpdate(message)))
-      .catch((error) => this.handleError(error));
+      .then(() => {
+        this.subscriberSubscribed = true;
+        this.markSubscriberReady();
+      })
+      .catch((error) => this.handleError(error, "subscriber"));
   }
 
-  bindClientEvents(client) {
+  bindCommandClientEvents(client) {
     client.on("ready", () => {
-      this.updateStatus({ status: "ready", connected: true, error: null });
-      void this.synchronize();
+      this.updateStatus({
+        status: this.subscriberOperational ? "ready" : "degraded",
+        connected: true,
+        commandConnected: true,
+        subscriberConnected: this.subscriberOperational,
+        error: null,
+        errorCode: null,
+      });
+      void this.synchronize().catch((error) => this.handleError(error, "command"));
     });
-    client.on("reconnecting", () => this.updateStatus({ status: "reconnecting", connected: false }));
-    client.on("end", () => this.updateStatus({ status: "disconnected", connected: false }));
-    client.on("error", (error) => this.handleError(error));
+    client.on("reconnecting", () => this.updateStatus({
+      status: "reconnecting",
+      connected: false,
+      commandConnected: false,
+    }));
+    client.on("end", () => this.updateStatus({
+      status: "disconnected",
+      connected: false,
+      commandConnected: false,
+    }));
+    client.on("error", (error) => this.handleError(error, "command"));
   }
 
-  handleError(error) {
+  bindSubscriberEvents(subscriber) {
+    subscriber.on("ready", () => {
+      if (this.subscriberSubscribed) this.markSubscriberReady();
+    });
+    subscriber.on("reconnecting", () => this.markSubscriberUnavailable("reconnecting"));
+    subscriber.on("end", () => this.markSubscriberUnavailable("disconnected"));
+    subscriber.on("error", (error) => this.handleError(error, "subscriber"));
+  }
+
+  markSubscriberReady() {
     if (this.stopping) return;
-    this.updateStatus({ status: "error", connected: false, error: error?.message ?? String(error) });
+    this.subscriberOperational = true;
+    const commandConnected = Boolean(this.state.commandConnected && this.client?.isReady);
+    this.updateStatus({
+      status: commandConnected ? "ready" : this.state.status,
+      connected: commandConnected,
+      commandConnected,
+      subscriberConnected: true,
+      ...(commandConnected ? { error: null, errorCode: null } : {}),
+    });
+  }
+
+  markSubscriberUnavailable(fallbackStatus) {
+    if (this.stopping) return;
+    this.subscriberOperational = false;
+    const commandConnected = Boolean(this.state.commandConnected && this.client?.isReady);
+    this.updateStatus({
+      status: commandConnected ? "degraded" : fallbackStatus,
+      connected: commandConnected,
+      commandConnected,
+      subscriberConnected: false,
+    });
+  }
+
+  handleError(error, role = "command") {
+    if (this.stopping) return;
+    if (role === "subscriber") this.subscriberOperational = false;
+    const commandConnected = role === "subscriber" &&
+      Boolean(this.state.commandConnected && this.client?.isReady);
+    this.updateStatus({
+      status: commandConnected ? "degraded" : "error",
+      connected: commandConnected,
+      commandConnected,
+      ...(role === "subscriber" ? { subscriberConnected: false } : {}),
+      error: safeError(error, this.url),
+      errorCode: error?.code ?? null,
+      lastErrorAt: new Date().toISOString(),
+    });
   }
 
   synchronize() {
@@ -158,19 +273,23 @@ export class RedisCoordinator {
       recentMessageKeys: Array.isArray(recentKeys) ? recentKeys : [],
     });
     this.updateStatus({
-      status: "ready",
+      status: this.subscriberOperational ? "ready" : "degraded",
       connected: true,
+      commandConnected: true,
+      subscriberConnected: this.subscriberOperational,
       version,
       lastSyncedAt: new Date().toISOString(),
       error: null,
+      errorCode: null,
     });
     this.startHeartbeat();
   }
 
   async handlePublishedUpdate(message) {
     const payload = safeJson(message, {});
-    if (payload.sourceId === this.instanceId && Number(payload.version) <= this.state.version) return;
-    await this.synchronize().catch((error) => this.handleError(error));
+    const publishedVersion = Number(payload.version);
+    if (Number.isFinite(publishedVersion) && publishedVersion <= this.state.version) return;
+    await this.synchronize().catch((error) => this.handleError(error, "command"));
   }
 
   async writeConfiguration(local, sections) {
@@ -189,11 +308,14 @@ export class RedisCoordinator {
       sourceId: this.instanceId,
     }));
     this.updateStatus({
-      status: "ready",
+      status: this.subscriberOperational ? "ready" : "degraded",
       connected: true,
+      commandConnected: true,
+      subscriberConnected: this.subscriberOperational,
       version,
       lastSyncedAt: new Date().toISOString(),
       error: null,
+      errorCode: null,
     });
     return version;
   }
@@ -209,7 +331,7 @@ export class RedisCoordinator {
       return { persisted: true, pending: false, version };
     } catch (error) {
       uniqueSections.forEach((section) => this.dirty.add(section));
-      this.handleError(error);
+      this.handleError(error, "command");
       return { persisted: false, pending: true, version: this.state.version, error: error.message };
     }
   }
@@ -229,7 +351,7 @@ export class RedisCoordinator {
       ]);
       return true;
     } catch (error) {
-      this.handleError(error);
+      this.handleError(error, "command");
       return false;
     }
   }
@@ -250,7 +372,7 @@ export class RedisCoordinator {
         ]);
         if ((Number(versionText) || 0) > this.state.version) await this.synchronize();
       } catch (error) {
-        this.handleError(error);
+        this.handleError(error, "command");
       }
     };
     void beat();
@@ -267,6 +389,12 @@ export class RedisCoordinator {
       this.subscriber?.isOpen ? this.subscriber.close().catch(() => {}) : null,
       this.client?.isOpen ? this.client.close().catch(() => {}) : null,
     ]);
-    this.updateStatus({ status: "disconnected", connected: false });
+    this.updateStatus({
+      status: "disconnected",
+      connected: false,
+      commandConnected: false,
+      subscriberConnected: false,
+    });
+    this.subscriberOperational = false;
   }
 }

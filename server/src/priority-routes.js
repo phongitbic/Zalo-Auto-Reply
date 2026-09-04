@@ -150,7 +150,7 @@ export const sanitizePriorityRoutes = (routes = []) => {
   });
 };
 
-export const loadPriorityRoutes = (filePath, legacyLocations = []) => {
+export const loadPriorityRoutes = (filePath) => {
   let source;
   try {
     source = JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -160,51 +160,60 @@ export const loadPriorityRoutes = (filePath, legacyLocations = []) => {
   }
 
   const storedRoutes = Array.isArray(source) ? source : source?.routes;
-  const routes = sanitizePriorityRoutes(storedRoutes);
-  if (routes.length || legacyLocations.length < 2) return routes;
-
-  const [origin, ...destinations] = legacyLocations;
-  return destinations.map((destination, index) => createPriorityRoute({
-    id: `legacy-${index + 1}`,
-    origin,
-    destination,
-  }));
+  return sanitizePriorityRoutes(storedRoutes);
 };
 
 const compileTerms = (primary, aliases) =>
   [...new Set([primary, ...aliases].map(normalizeLocation).filter(Boolean))];
 
 export const compilePriorityRoutes = (routes = []) => {
-  const compiledRoutes = routes.map((route) => ({
+  const compiledRoutes = routes.map((route, index) => ({
+    index,
     route,
     originTerms: compileTerms(route.origin, route.originAliases),
     destinationTerms: compileTerms(route.destination, route.destinationAliases),
   }));
   const locationTerms = new Set();
+  const routeIndexesByTerm = new Map();
   for (const route of compiledRoutes) {
-    route.originTerms.forEach((term) => locationTerms.add(term));
-    route.destinationTerms.forEach((term) => locationTerms.add(term));
+    for (const term of new Set([...route.originTerms, ...route.destinationTerms])) {
+      locationTerms.add(term);
+      const routeIndexes = routeIndexesByTerm.get(term) ?? [];
+      routeIndexes.push(route.index);
+      routeIndexesByTerm.set(term, routeIndexes);
+    }
   }
-  const termsByFirstToken = new Map();
+  const termTrie = { children: new Map(), term: null };
   for (const term of locationTerms) {
     const tokens = term.split(" ");
-    const entries = termsByFirstToken.get(tokens[0]) ?? [];
-    entries.push({ term, tokens });
-    termsByFirstToken.set(tokens[0], entries);
+    let node = termTrie;
+    for (const token of tokens) {
+      let child = node.children.get(token);
+      if (!child) {
+        child = { children: new Map(), term: null };
+        node.children.set(token, child);
+      }
+      node = child;
+    }
+    node.term = term;
   }
-  return { routes: compiledRoutes, locationTerms: [...locationTerms], termsByFirstToken };
+  return {
+    routes: compiledRoutes,
+    locationTerms: [...locationTerms],
+    termTrie,
+    routeIndexesByTerm,
+  };
 };
 
-const findTermOccurrences = (normalizedMessage, termsByFirstToken) => {
+const findTermOccurrences = (normalizedMessage, termTrie) => {
   const messageTokens = normalizedMessage.split(" ");
   const occurrences = new Map();
   for (let index = 0; index < messageTokens.length; index += 1) {
-    const candidates = termsByFirstToken.get(messageTokens[index]);
-    if (!candidates) continue;
-    for (const candidate of candidates) {
-      if (occurrences.has(candidate.term)) continue;
-      const matches = candidate.tokens.every((token, offset) => messageTokens[index + offset] === token);
-      if (matches) occurrences.set(candidate.term, index);
+    let node = termTrie;
+    for (let cursor = index; cursor < messageTokens.length; cursor += 1) {
+      node = node.children.get(messageTokens[cursor]);
+      if (!node) break;
+      if (node.term && !occurrences.has(node.term)) occurrences.set(node.term, index);
     }
   }
   return occurrences;
@@ -221,11 +230,18 @@ const termIndex = (occurrences, terms) => {
 
 export const matchPriorityRoute = (normalizedMessage, compiled) => {
   if (!normalizedMessage) return { accepted: false, reason: "IGNORED_INVALID_MESSAGE" };
-  const occurrences = findTermOccurrences(normalizedMessage, compiled.termsByFirstToken);
+  const occurrences = findTermOccurrences(normalizedMessage, compiled.termTrie);
+  const candidateIndexes = new Set();
+  for (const term of occurrences.keys()) {
+    for (const routeIndex of compiled.routeIndexesByTerm.get(term) ?? []) {
+      candidateIndexes.add(routeIndex);
+    }
+  }
   let disabledMatch = null;
   let wrongDirectionMatch = null;
 
-  for (const item of compiled.routes) {
+  for (const routeIndex of [...candidateIndexes].sort((left, right) => left - right)) {
+    const item = compiled.routes[routeIndex];
     const originIndex = termIndex(occurrences, item.originTerms);
     const destinationIndex = termIndex(occurrences, item.destinationTerms);
     if (originIndex === -1 || destinationIndex === -1 || originIndex === destinationIndex) continue;

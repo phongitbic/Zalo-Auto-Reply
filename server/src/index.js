@@ -71,7 +71,6 @@ const bot = new ZaloReplyBot({
   qrFile: config.qrFile,
   enabled: config.enabled,
   priorityOnly: config.priorityOnly,
-  priorityLocations: config.priorityLocations,
   priorityRoutes,
   recentMessages: successfulHistory,
   configUpdatedAt: config.botState.updatedAt ?? null,
@@ -84,7 +83,10 @@ const bot = new ZaloReplyBot({
       void redisCoordinator?.recordProcessed(payload.groupId, payload.messageId);
     }
     if (event === "decision") {
-      console.log(`[decision] group=${payload.groupId} message=${payload.messageId ?? "unknown"} accepted=${payload.accepted} reason=${payload.reason} route=${payload.matchedRoute ?? "-"}`);
+      if (config.hotPathLogging) {
+        console.log(`[decision] group=${payload.groupId} message=${payload.messageId ?? "unknown"} accepted=${payload.accepted} reason=${payload.reason} route=${payload.matchedRoute ?? "-"}`);
+      }
+      return;
     }
     io.emit(event, payload);
   },
@@ -124,6 +126,8 @@ redisCoordinator = new RedisCoordinator({
   prefix: config.redisPrefix,
   channel: config.redisChannel,
   heartbeatMs: config.redisHeartbeatMs,
+  connectTimeoutMs: config.redisConnectTimeoutMs,
+  pingIntervalMs: config.redisPingIntervalMs,
   getLocalConfig: () => ({ state: stateStore.value, routes: priorityRoutes }),
   onRemoteConfig: applyRemoteConfiguration,
   onStatus: (status) => bot.setInfrastructureStatus(status),

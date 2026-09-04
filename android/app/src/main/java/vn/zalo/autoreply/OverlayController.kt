@@ -96,7 +96,12 @@ class OverlayController(
             else if (mode == "priority") "Đang nhận cuốc ưu tiên"
             else "Đang nhận tất cả"
         val routeLine = "Tuyến: ${routes?.optInt("enabled", 0) ?: 0} bật · ${routes?.optInt("disabled", 0) ?: 0} tắt"
-        val redisLine = "Redis: ${if (redis?.optBoolean("connected") == true) "bình thường" else "mất kết nối"}"
+        val redisConnected = redis?.optBoolean("connected") == true
+        val subscriberConnected = redis?.optBoolean("subscriberConnected", true) != false
+        val redisState = if (!redisConnected) "mất kết nối"
+            else if (!subscriberConnected) "lệnh ổn, đồng bộ đang nối lại"
+            else "bình thường"
+        val redisLine = "Redis: $redisState"
         val updateLine = if (updatedAt.isBlank()) "" else "\nCập nhật: ${updatedAt.replace('T', ' ').take(19)}"
         status?.text = "$headline\n$routeLine\n$redisLine$updateLine"
         status?.setTextColor(if (enabled) Color.rgb(55, 224, 166) else Color.LTGRAY)

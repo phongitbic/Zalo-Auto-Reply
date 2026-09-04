@@ -149,18 +149,15 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
                 val status = args.firstOrNull() as? JSONObject
                 if (status != null) {
                     lastBotStatus = status
-                    val enabled = status.optBoolean("enabled")
-                    val mode = status.optString("mode", "all")
-                    val routeStats = status.optJSONObject("priorityRouteStats")
-                    val redisConnected = status.optJSONObject("redis")?.optBoolean("connected") == true
-                    preferences.edit().putString("mode", mode).apply()
-                    overlay?.updateBotState(status)
-                    val modeLabel = if (!enabled) "Đã dừng nhận đơn"
-                        else if (mode == "priority") "Đang nhận cuốc ưu tiên"
-                        else "Đang nhận tất cả"
-                    updateForeground(
-                        "$modeLabel · ${routeStats?.optInt("enabled", 0) ?: 0} tuyến bật · Redis ${if (redisConnected) "ổn định" else "mất kết nối"}"
-                    )
+                    renderBotStatus(status)
+                }
+            }
+            on("redis") { args ->
+                val redis = args.firstOrNull() as? JSONObject
+                val status = lastBotStatus
+                if (redis != null && status != null) {
+                    status.put("redis", redis)
+                    renderBotStatus(status)
                 }
             }
             on("ORDER_ACCEPTED") { args ->
@@ -176,6 +173,26 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
             }
             connect()
         }
+    }
+
+    private fun renderBotStatus(status: JSONObject) {
+        val enabled = status.optBoolean("enabled")
+        val mode = status.optString("mode", "all")
+        val routeStats = status.optJSONObject("priorityRouteStats")
+        val redis = status.optJSONObject("redis")
+        val redisConnected = redis?.optBoolean("connected") == true
+        val subscriberConnected = redis?.optBoolean("subscriberConnected", true) != false
+        preferences.edit().putString("mode", mode).apply()
+        overlay?.updateBotState(status)
+        val modeLabel = if (!enabled) "Đã dừng nhận đơn"
+            else if (mode == "priority") "Đang nhận cuốc ưu tiên"
+            else "Đang nhận tất cả"
+        val redisLabel = if (!redisConnected) "mất kết nối"
+            else if (!subscriberConnected) "đang nối lại đồng bộ"
+            else "ổn định"
+        updateForeground(
+            "$modeLabel · ${routeStats?.optInt("enabled", 0) ?: 0} tuyến bật · Redis $redisLabel"
+        )
     }
 
     private fun handleOrder(order: JSONObject, sound: Boolean, vibrate: Boolean, speech: Boolean) {

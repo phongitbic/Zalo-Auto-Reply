@@ -95,3 +95,17 @@ test("distinguishes an unknown pair from a message without a complete route", ()
   assert.equal(match("Bắc Ninh đi Quảng Ninh", routes).reason, "IGNORED_ROUTE_NOT_FOUND");
   assert.equal(match("Chỉ nhắc tới Quảng Ninh", routes).reason, "IGNORED_INVALID_MESSAGE");
 });
+
+test("indexes route candidates instead of scanning every configured route", () => {
+  const routes = Array.from({ length: 5000 }, (_, index) => route({
+    id: `route-${index}`,
+    origin: `Diem di ${index}`,
+    destination: `Diem den ${index}`,
+  }));
+  const compiled = compilePriorityRoutes(routes);
+
+  assert.deepEqual(compiled.routeIndexesByTerm.get("diem di 4999"), [4999]);
+  const result = matchPriorityRoute("diem di 4999 den diem den 4999", compiled);
+  assert.equal(result.accepted, true);
+  assert.equal(result.route.id, "route-4999");
+});

@@ -47,9 +47,7 @@ const getQuotePayload = (message) => {
   };
 };
 
-const getReplyPayload = (message, replyText, quote) => {
-  const senderName = getSenderName(message);
-  const senderId = getSenderId(message);
+const getReplyPayload = (senderName, senderId, replyText, quote) => {
   if (!senderName || !senderId) return quote ? { msg: replyText, quote } : replyText;
 
   const mentionText = `@${senderName}`;
@@ -72,7 +70,6 @@ export class ZaloReplyBot {
     qrFile,
     enabled = true,
     priorityOnly = false,
-    priorityLocations = [],
     priorityRoutes = [],
     hotPathLogging = false,
     keepAliveIntervalMs = 15000,
@@ -92,7 +89,6 @@ export class ZaloReplyBot {
     this.priorityOnly = priorityOnly;
     this.priorityRoutes = priorityRoutes;
     this.compiledPriorityRoutes = compilePriorityRoutes(priorityRoutes);
-    this.priorityLocations = priorityLocations;
     this.hotPathLogging = hotPathLogging;
     this.keepAliveIntervalMs = keepAliveIntervalMs;
     this.keepAliveRequestTimeoutMs = keepAliveRequestTimeoutMs;
@@ -160,7 +156,6 @@ export class ZaloReplyBot {
       operationMode: this.enabled ? (this.priorityOnly ? "PRIORITY" : "ALL") : "STOPPED",
       qrAvailable: this.qrAvailable,
       priorityOnly: this.priorityOnly,
-      priorityLocationsConfigured: this.compiledPriorityRoutes.locationTerms.length,
       priorityRoutes: summarizePriorityRoutes(this.priorityRoutes),
       priorityRouteStats,
       redis: this.redis,
@@ -171,6 +166,10 @@ export class ZaloReplyBot {
 
   publish() {
     this.emit("status", this.snapshot());
+  }
+
+  publishStats() {
+    this.emit("stats", { ...this.stats });
   }
 
   async start() {
@@ -403,7 +402,12 @@ export class ZaloReplyBot {
     }
 
     const quote = getQuotePayload(message);
-    const payload = getReplyPayload(message, this.replyText, quote);
+    const payload = getReplyPayload(
+      decisionBase.senderName,
+      decisionBase.senderId,
+      this.replyText,
+      quote
+    );
     const networkStartedAt = performance.now();
 
     // Calling the async function starts request preparation synchronously up to its first await.
@@ -424,7 +428,7 @@ export class ZaloReplyBot {
         error: error?.message ?? String(error),
       });
       this.emit("decision", { ...decisionBase, accepted: false, reason: "SEND_FAILED", matchedRoute });
-      this.publish();
+      this.publishStats();
     };
 
     let sendPromise;
@@ -468,7 +472,6 @@ export class ZaloReplyBot {
           status: "success",
         };
         this.emit("ORDER_ACCEPTED", order);
-        this.emit("activity", { ...order, at: order.sentAt });
         this.emit("decision", {
           ...decisionBase,
           accepted: true,
@@ -476,7 +479,7 @@ export class ZaloReplyBot {
           matchedRoute,
           timings: { normalizationMs, routeMatchMs, dispatchMs, networkMs, totalMs: latencyMs },
         });
-        this.publish();
+        this.publishStats();
       })
       .catch(reportFailure);
 
@@ -516,11 +519,6 @@ export class ZaloReplyBot {
     this.publish();
   }
 
-  setPriorityLocations(locations) {
-    this.priorityLocations = [...locations];
-    this.publish();
-  }
-
   setPriorityRoutes(routes) {
     this.priorityRoutes = routes;
     this.compiledPriorityRoutes = compilePriorityRoutes(routes);
@@ -541,6 +539,6 @@ export class ZaloReplyBot {
 
   setInfrastructureStatus(redis) {
     this.redis = { ...this.redis, ...redis };
-    this.publish();
+    this.emit("redis", { ...this.redis });
   }
 }

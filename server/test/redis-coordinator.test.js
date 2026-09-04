@@ -129,3 +129,45 @@ test("Pub/Sub and config version synchronize a route change to every bot process
 
   await Promise.all([processOne.stop(), processTwo.stop()]);
 });
+
+test("keeps command health online when only the Pub/Sub connection drops", async () => {
+  const backend = new FakeRedisBackend();
+  const local = { state: { enabled: true, mode: "priority" }, routes: [] };
+  let clientOptions;
+  let syncCount = 0;
+  const coordinator = new RedisCoordinator({
+    url: "redis://user:secret@127.0.0.1:6379/2",
+    heartbeatMs: 60000,
+    connectTimeoutMs: 4321,
+    pingIntervalMs: 8765,
+    clientFactory: (options) => {
+      clientOptions = options;
+      return new FakeRedisClient(backend);
+    },
+    getLocalConfig: () => local,
+    onRemoteConfig: async () => { syncCount += 1; },
+  });
+
+  await coordinator.start();
+  await waitFor(() => syncCount === 1 && coordinator.snapshot().subscriberConnected);
+  assert.equal(syncCount, 1);
+  assert.equal(clientOptions.socket.connectTimeout, 4321);
+  assert.equal(clientOptions.socket.keepAlive, true);
+  assert.equal(clientOptions.socket.noDelay, true);
+  assert.equal(clientOptions.pingInterval, 8765);
+  assert.ok(clientOptions.socket.reconnectStrategy(20) <= 2099);
+  assert.equal(coordinator.snapshot().server, "redis://127.0.0.1:6379/2");
+
+  const outage = Object.assign(new Error("subscriber unavailable"), { code: "ECONNRESET" });
+  coordinator.subscriber.emit("error", outage);
+  assert.equal(coordinator.snapshot().connected, true);
+  assert.equal(coordinator.snapshot().commandConnected, true);
+  assert.equal(coordinator.snapshot().subscriberConnected, false);
+  assert.equal(coordinator.snapshot().status, "degraded");
+  assert.equal(coordinator.snapshot().errorCode, "ECONNRESET");
+
+  coordinator.subscriber.emit("ready");
+  assert.equal(coordinator.snapshot().status, "ready");
+  assert.equal(coordinator.snapshot().subscriberConnected, true);
+  await coordinator.stop();
+});
