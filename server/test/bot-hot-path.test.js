@@ -250,6 +250,32 @@ test("preconnects the group send origin once and does not call a Zalo API", () =
   bot.stopGroupPreconnect();
 });
 
+test("preconnects the group origin immediately before dispatch", () => {
+  const actions = [];
+  const bot = new ZaloReplyBot({
+    allowedGroupIds: new Set(["group-1"]),
+    replyText: "Ok",
+    sessionFile: "unused",
+    preconnect: (origin) => actions.push(`preconnect:${origin}`),
+  });
+  bot.api = {
+    zpwServiceMap: { group: ["https://group.example.test/api/group"] },
+    sendMessage: () => {
+      actions.push("send");
+      return Promise.resolve();
+    },
+  };
+
+  bot.onMessage(makeMessage({
+    data: {
+      msgId: "preconnect-before-send",
+      content: "0 - 20p 1k ghep tpbn - my dinh 200k",
+    },
+  }));
+
+  assert.deepEqual(actions, ["preconnect:https://group.example.test", "send"]);
+});
+
 test("reuses a native Bun HTTP Keep-Alive connection for sequential requests", async () => {
   const sockets = new Set();
   const server = http.createServer((_req, res) => res.end("ok"));
@@ -375,11 +401,14 @@ test("times out a stalled Zalo keep-alive request", async () => {
 
 test("reconnects after the Zalo listener closes permanently", async () => {
   let loginCalls = 0;
+  const preconnectedOrigins = [];
   const bot = new ZaloReplyBot({
     allowedGroupIds: new Set(),
     replyText: "Ok",
     sessionFile: "unused",
     keepAliveIntervalMs: 100000,
+    groupPreconnectIntervalMs: 100000,
+    preconnect: (origin) => preconnectedOrigins.push(origin),
     reconnectBaseDelayMs: 1,
     reconnectMaxDelayMs: 1,
   });
@@ -387,6 +416,7 @@ test("reconnects after the Zalo listener closes permanently", async () => {
     loginCalls += 1;
     const callbacks = {};
     return {
+      zpwServiceMap: { group: [`https://group-${loginCalls}.example.test/api/group`] },
       keepAlive: () => Promise.resolve(),
       listener: {
         on: (event, callback) => { callbacks[event] = callback; },
@@ -401,6 +431,10 @@ test("reconnects after the Zalo listener closes permanently", async () => {
   await bot.start();
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(loginCalls, 2);
+  assert.deepEqual(preconnectedOrigins, [
+    "https://group-1.example.test",
+    "https://group-2.example.test",
+  ]);
   await bot.stop();
 });
 

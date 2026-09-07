@@ -53,8 +53,8 @@ Các biến quan trọng nằm trong [server/.env.example](server/.env.example):
 - `BOT_STATE_FILE`: lưu START/STOP và chế độ hiện tại.
 - `ORDER_HISTORY_FILE`: lịch sử các đơn Zalo đã xác nhận gửi thành công để đồng bộ lại app.
 - `MAX_SOCKET_CONNECTIONS`: giới hạn client đồng thời cho một instance.
-- `KEEP_ALIVE_INTERVAL_MS`: heartbeat Zalo, tối thiểu 5 giây.
-- `GROUP_PRECONNECT_INTERVAL_MS`: chuẩn bị sẵn DNS/TCP/TLS tới đúng host gửi nhóm, mặc định 5 giây; không tạo request API Zalo giả.
+- `KEEP_ALIVE_INTERVAL_MS`: heartbeat Zalo, mặc định và tối thiểu 5 giây.
+- `GROUP_PRECONNECT_INTERVAL_MS`: chuẩn bị sẵn DNS/TCP/TLS tới đúng host gửi nhóm, mặc định 1 giây. Backend cũng preconnect ngay trước mỗi lần gửi; không tạo request API Zalo giả.
 - `REDIS_URL`: địa chỉ Redis 5, mặc định `redis://127.0.0.1:6379`; nếu có `requirepass` dùng `redis://:MAT_KHAU_URL_ENCODED@127.0.0.1:6379`.
 - `REDIS_PREFIX`: tiền tố khóa khi nhiều ứng dụng dùng chung Redis.
 - `REDIS_CHANNEL`: kênh Pub/Sub đồng bộ cấu hình, mặc định `priority_routes_updated`.

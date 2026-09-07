@@ -71,8 +71,8 @@ export class ZaloReplyBot {
     priorityOnly = false,
     priorityRoutes = [],
     hotPathLogging = false,
-    keepAliveIntervalMs = 15000,
-    groupPreconnectIntervalMs = 5000,
+    keepAliveIntervalMs = 5000,
+    groupPreconnectIntervalMs = 1000,
     keepAliveRequestTimeoutMs = 5000,
     httpRequestTimeoutMs = 30000,
     reconnectBaseDelayMs = 1000,
@@ -97,6 +97,7 @@ export class ZaloReplyBot {
     this.keepAliveTimer = null;
     this.keepAliveInFlight = false;
     this.groupPreconnectTimer = null;
+    this.groupServiceOrigin = null;
     this.preconnect = preconnect;
     this.reconnectBaseDelayMs = reconnectBaseDelayMs;
     this.reconnectMaxDelayMs = reconnectMaxDelayMs;
@@ -179,7 +180,11 @@ export class ZaloReplyBot {
       const zalo = new Zalo({ logging: false, checkUpdate: false, polyfill: this.httpFetch });
       const api = await this.login(zalo);
       if (this.shuttingDown) return;
+      this.stopKeepAlive();
+      this.stopGroupPreconnect();
+      this.keepAliveInFlight = false;
       this.api = api;
+      this.groupServiceOrigin = null;
       api.listener.on("message", (message) => this.onMessage(message));
       api.listener.on("connected", () => {
         if (api !== this.api) return;
@@ -238,14 +243,15 @@ export class ZaloReplyBot {
     if (this.keepAliveTimer) return;
 
     const ping = async () => {
-      if (!this.api || this.keepAliveInFlight) return;
+      const api = this.api;
+      if (!api || this.keepAliveInFlight) return;
       this.keepAliveInFlight = true;
       try {
-        await this.api.keepAlive();
+        await api.keepAlive();
       } catch (error) {
         if (this.hotPathLogging) console.warn("Zalo keep-alive failed:", error.message);
       } finally {
-        this.keepAliveInFlight = false;
+        if (api === this.api) this.keepAliveInFlight = false;
       }
     };
 
@@ -260,10 +266,14 @@ export class ZaloReplyBot {
   }
 
   preconnectGroupTransport() {
-    const groupServiceUrl = this.api?.zpwServiceMap?.group?.[0];
-    if (!groupServiceUrl || !this.preconnect) return false;
+    if (!this.preconnect) return false;
     try {
-      this.preconnect(new URL(groupServiceUrl).origin);
+      if (!this.groupServiceOrigin) {
+        const groupServiceUrl = this.api?.zpwServiceMap?.group?.[0];
+        if (!groupServiceUrl) return false;
+        this.groupServiceOrigin = new URL(groupServiceUrl).origin;
+      }
+      this.preconnect(this.groupServiceOrigin);
       return true;
     } catch (error) {
       if (this.hotPathLogging) console.warn("Zalo group preconnect failed:", error.message);
@@ -294,6 +304,7 @@ export class ZaloReplyBot {
 
     const api = this.api;
     this.api = null;
+    this.groupServiceOrigin = null;
     if (api?.listener) api.listener.stop();
     this.status = "offline";
     this.publish();
@@ -457,6 +468,7 @@ export class ZaloReplyBot {
 
     let sendPromise;
     try {
+      this.preconnectGroupTransport();
       sendPromise = Promise.resolve(this.api.sendMessage(payload, message.threadId, ThreadType.Group));
     } catch (error) {
       reportFailure(error);
