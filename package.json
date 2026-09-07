@@ -3,13 +3,13 @@
   "private": true,
   "workspaces": ["server", "client"],
   "scripts": {
-    "dev": "concurrently -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
-    "build": "npm run build -w client",
-    "start": "npm run start -w server",
-    "test": "npm run test -w server",
-    "android:sync": "npm run build && cap sync android",
-    "android:debug": "npm run android:sync && cd android && gradlew.bat assembleDebug",
-    "android:release": "npm run android:sync && cd android && gradlew.bat assembleRelease"
+    "dev": "concurrently -n server,client -c blue,green \"bun run --cwd server dev\" \"bun run --cwd client dev\"",
+    "build": "bun run --cwd client build",
+    "start": "bun run --cwd server start",
+    "test": "bun test server/test client/src/server-url.test.js",
+    "android:sync": "bun run build && bun node_modules/@capacitor/cli/bin/capacitor sync android",
+    "android:debug": "bun run android:sync && cd android && ./gradlew.bat assembleDebug",
+    "android:release": "bun run android:sync && cd android && ./gradlew.bat assembleRelease"
   },
   "dependencies": {
     "@capacitor/core": "^8.5.1",

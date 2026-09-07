@@ -196,7 +196,7 @@ class OverlayController(
     private fun confirmStop() {
         val dialog = AlertDialog.Builder(context)
             .setTitle("Dừng nhận đơn?")
-            .setMessage("VPS sẽ ngừng trả lời tin mới ngay sau khi xác nhận.")
+            .setMessage("Máy chủ sẽ ngừng trả lời tin mới ngay sau khi xác nhận.")
             .setNegativeButton("Hủy", null)
             .setPositiveButton("Dừng") { _, _ -> control("stop", mode) }
             .create()

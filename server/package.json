@@ -3,20 +3,23 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/index.js",
-    "start": "node src/index.js",
-    "test": "node --test",
-    "redis:check": "node scripts/check-redis.js",
-    "benchmark": "node scripts/benchmark-hot-path.js"
+    "dev": "bun --no-env-file --watch src/index.js",
+    "start": "bun --no-env-file src/index.js",
+    "test": "bun --no-env-file test",
+    "redis:check": "bun --no-env-file scripts/check-redis.js",
+    "benchmark": "bun --no-env-file scripts/benchmark-hot-path.js",
+    "benchmark:http": "bun --no-env-file scripts/benchmark-http.js"
   },
-  "engines": { "node": ">=20.19.0" },
+  "engines": {
+    "bun": ">=1.4.1"
+  },
   "dependencies": {
-    "cors": "^2.8.5",
+    "@elysiajs/cors": "1.4.2",
+    "@socket.io/bun-engine": "0.1.2",
     "dotenv": "^17.2.2",
-    "express": "^5.1.0",
+    "elysia": "1.4.30",
     "redis": "^6.2.1",
-    "socket.io": "^4.8.1",
-    "undici": "^7.29.0",
+    "socket.io": "4.8.3",
     "zca-js": "2.1.2"
   }
 }

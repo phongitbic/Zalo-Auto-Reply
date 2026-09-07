@@ -230,7 +230,7 @@ test("starts one Zalo keep-alive request immediately without overlapping", async
   await pendingRequest;
 });
 
-test("caps and reuses HTTP connections for sequential requests", async () => {
+test("reuses a native Bun HTTP Keep-Alive connection for sequential requests", async () => {
   const sockets = new Set();
   const server = http.createServer((_req, res) => res.end("ok"));
   server.on("connection", (socket) => sockets.add(socket));
@@ -250,7 +250,6 @@ test("caps and reuses HTTP connections for sequential requests", async () => {
       await response.text();
     }
 
-    assert.ok(sockets.size <= 4);
     assert.ok(sockets.size < 8);
   } finally {
     await bot.stop();
@@ -284,6 +283,48 @@ test("does not queue a reply behind another in-flight HTTP request", async () =>
     firstResponse.end("first");
     await (await first).text();
     await (await second).text();
+  } finally {
+    await bot.stop();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("does not queue replies behind a stalled Zalo keep-alive request", async () => {
+  let keepAliveResponse;
+  let markKeepAliveStarted;
+  const keepAliveStarted = new Promise((resolve) => { markKeepAliveStarted = resolve; });
+  let repliesSeen = 0;
+  const server = http.createServer((req, res) => {
+    if (req.url === "/keepalive") {
+      keepAliveResponse = res;
+      markKeepAliveStarted();
+      return;
+    }
+    repliesSeen += 1;
+    res.end("ok");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const bot = new ZaloReplyBot({
+    allowedGroupIds: new Set(),
+    replyText: "Ok",
+    sessionFile: "unused",
+  });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+
+  try {
+    const keepAliveRequest = bot.httpFetch(`${origin}/keepalive`);
+    await Promise.race([
+      keepAliveStarted,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Keep-alive did not start")), 500)),
+    ]);
+    const replies = Array.from({ length: 8 }, () => bot.httpFetch(`${origin}/group-message`));
+    await Promise.race([
+      Promise.all(replies.map(async (request) => (await request).text())),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Replies were queued")), 500)),
+    ]);
+    assert.equal(repliesSeen, 8);
+    keepAliveResponse.end("ok");
+    await (await keepAliveRequest).text();
   } finally {
     await bot.stop();
     await new Promise((resolve) => server.close(resolve));

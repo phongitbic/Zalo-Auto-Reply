@@ -13,3 +13,4 @@ android/local.properties
 android/signing.properties
 *.jks
 *.keystore
+.tmp/

@@ -130,8 +130,13 @@ code { color: #8eb6ff; overflow-wrap: anywhere; }
 .connect-card h1 { margin-bottom: 0; }
 .notice { position: fixed; z-index: 10; right: 22px; bottom: 22px; max-width: min(440px, calc(100% - 44px)); padding: 14px 18px; border: 1px solid #46627f; border-radius: 13px; color: #fff; background: #19304a; box-shadow: 0 18px 45px #000a; text-align: left; }
 .notice.inline { position: static; max-width: none; }
-.qr-card { padding-top: 10px; text-align: center; }
-.qr-card img { width: min(290px, 100%); border-radius: 14px; background: white; }
+.zalo-login-status { padding: 7px 10px; border-radius: 999px; color: #fbbf24; background: #713f123d; font-size: 12px; font-weight: 800; }
+.zalo-login-status.online { color: #34d399; background: #064e3b66; }
+.zalo-login-status.error, .zalo-login-status.offline { color: #fb7185; background: #88133755; }
+.zalo-login-success { margin: 0; padding: 15px; border: 1px solid #168568; border-radius: 13px; color: #65ddb9; background: #064e3b33; }
+.qr-card { padding-top: 2px; text-align: center; }
+.qr-card img { display: block; width: min(290px, 100%); margin: 0 auto 14px; border-radius: 14px; background: white; }
+.qr-card .secondary { margin-top: 3px; }
 
 @media (prefers-color-scheme: light) {
   :root { color: #142236; background: #eef4fb; }

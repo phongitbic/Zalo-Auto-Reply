@@ -3,6 +3,6 @@
   "appName": "Điều khiển nhận đơn",
   "webDir": "client/dist",
   "server": {
-    "androidScheme": "https"
+    "androidScheme": "http"
   }
 }

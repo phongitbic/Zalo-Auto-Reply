@@ -53,7 +53,7 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
 
         override fun onLost(network: Network) {
             updateForeground("Mất mạng, đang chờ kết nối lại")
-            overlay?.updateStatus("Mất kết nối VPS", false)
+            overlay?.updateStatus("Mất kết nối máy chủ", false)
         }
     }
 
@@ -64,7 +64,7 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
         connectivity = getSystemService(ConnectivityManager::class.java)
         textToSpeech = TextToSpeech(this, this)
         createForegroundChannel()
-        startForeground(FOREGROUND_ID, foregroundNotification("Đang kết nối VPS"))
+        startForeground(FOREGROUND_ID, foregroundNotification("Đang kết nối máy chủ"))
         try {
             connectivity.registerDefaultNetworkCallback(networkCallback)
         } catch (_: Exception) {
@@ -115,10 +115,10 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun reconnectSocket() {
-        val serverUrl = preferences.getString("server_url", null)
+        val serverUrl = ServerUrlPolicy.normalize(preferences.getString("server_url", null))
         val token = secretStore.getToken()
         if (serverUrl.isNullOrBlank() || token.isNullOrBlank()) {
-            updateForeground("Chưa cấu hình địa chỉ VPS")
+            updateForeground("Chưa cấu hình địa chỉ máy chủ")
             return
         }
 
@@ -135,15 +135,15 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
         socket = IO.socket(URI.create(serverUrl), options).apply {
             on(Socket.EVENT_CONNECT) {
                 updateForeground("Bot nhận đơn đang hoạt động")
-                overlay?.updateStatus("Đã kết nối VPS", true)
+                overlay?.updateStatus("Đã kết nối máy chủ", true)
             }
             on(Socket.EVENT_DISCONNECT) {
-                updateForeground("Đang kết nối lại VPS")
-                overlay?.updateStatus("Mất kết nối VPS", false)
+                updateForeground("Đang kết nối lại máy chủ")
+                overlay?.updateStatus("Mất kết nối máy chủ", false)
             }
             on(Socket.EVENT_CONNECT_ERROR) {
-                updateForeground("Không thể kết nối VPS")
-                overlay?.updateStatus("Mất kết nối VPS", false)
+                updateForeground("Không thể kết nối máy chủ")
+                overlay?.updateStatus("Mất kết nối máy chủ", false)
             }
             on("status") { args ->
                 val status = args.firstOrNull() as? JSONObject
@@ -204,7 +204,7 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
 
     fun sendControl(action: String, mode: String = preferences.getString("mode", "all") ?: "all") {
         preferences.edit().putString("mode", mode).apply()
-        val serverUrl = preferences.getString("server_url", null) ?: return
+        val serverUrl = ServerUrlPolicy.normalize(preferences.getString("server_url", null)) ?: return
         val token = secretStore.getToken() ?: return
         worker.execute {
             try {
@@ -222,9 +222,9 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
                 connection.disconnect()
                 updateForeground(if (succeeded) {
                     if (action == "start") "Bot nhận đơn đang hoạt động" else "Đã dừng nhận đơn"
-                } else "VPS từ chối thao tác")
+                } else "Máy chủ từ chối thao tác")
             } catch (_: Exception) {
-                updateForeground("Mất kết nối VPS")
+                updateForeground("Mất kết nối máy chủ")
             }
         }
     }
@@ -249,7 +249,7 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
             FOREGROUND_CHANNEL,
             "Dịch vụ nhận đơn",
             NotificationManager.IMPORTANCE_LOW
-        ).apply { description = "Duy trì kết nối với VPS khi ứng dụng chạy nền" }
+        ).apply { description = "Duy trì kết nối với máy chủ khi ứng dụng chạy nền" }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 

@@ -55,7 +55,7 @@ object OrderNotifier {
         val manager = context.getSystemService(NotificationManager::class.java)
         if (manager.getNotificationChannel(id) != null) return
         val channel = NotificationChannel(id, "Đơn đã nhận", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "Thông báo sau khi VPS gửi OK thành công"
+            description = "Thông báo sau khi máy chủ gửi OK thành công"
             enableVibration(vibrate)
             vibrationPattern = if (vibrate) longArrayOf(0, 250, 120, 500) else longArrayOf(0)
             if (sound) {

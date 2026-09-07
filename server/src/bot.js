@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { Agent, fetch as undiciFetch } from "undici";
 import { LoginQRCallbackEventType, ThreadType, Zalo } from "zca-js";
 import { RecentMessageCache } from "./recent-message-cache.js";
 import {
@@ -73,7 +72,6 @@ export class ZaloReplyBot {
     priorityRoutes = [],
     hotPathLogging = false,
     keepAliveIntervalMs = 15000,
-    httpConnections = 4,
     keepAliveRequestTimeoutMs = 5000,
     httpRequestTimeoutMs = 30000,
     reconnectBaseDelayMs = 1000,
@@ -100,20 +98,14 @@ export class ZaloReplyBot {
     this.reconnectAttempts = 0;
     this.reconnectTimer = null;
     this.shuttingDown = false;
-    this.httpAgent = new Agent({
-      connections: httpConnections,
-      pipelining: 1,
-      keepAliveTimeout: 60000,
-      keepAliveMaxTimeout: 600000,
-    });
     this.httpFetch = (url, options = {}) => {
-      const { agent: _unusedAgent, ...fetchOptions } = options;
+      const { agent: _unusedAgent, dispatcher: _unusedDispatcher, ...fetchOptions } = options;
       const timeoutMs = String(url).includes("/keepalive")
         ? this.keepAliveRequestTimeoutMs
         : this.httpRequestTimeoutMs;
-      return undiciFetch(url, {
+      return fetch(url, {
         ...fetchOptions,
-        dispatcher: this.httpAgent,
+        keepalive: true,
         signal: fetchOptions.signal ?? AbortSignal.timeout(timeoutMs),
       });
     };
@@ -270,7 +262,6 @@ export class ZaloReplyBot {
     const api = this.api;
     this.api = null;
     if (api?.listener) api.listener.stop();
-    await this.httpAgent.close();
     this.status = "offline";
     this.publish();
   }

@@ -38,6 +38,7 @@ const orderHistory = loadJsonFile(orderHistoryFile, [], Array.isArray);
 
 export const config = {
   port: Number(process.env.PORT || 3001),
+  serverHost: process.env.SERVER_HOST || "0.0.0.0",
   clientOrigin: process.env.CLIENT_ORIGIN || "http://localhost:5173",
   clientOrigins: splitValues(
     process.env.CLIENT_ORIGINS ||
@@ -56,7 +57,6 @@ export const config = {
   priorityRoutes: loadPriorityRoutes(priorityRoutesFile),
   hotPathLogging: process.env.HOT_PATH_LOGGING === "true",
   keepAliveIntervalMs: Math.max(5000, Number(process.env.KEEP_ALIVE_INTERVAL_MS) || 15000),
-  httpConnections: Math.min(16, Math.max(1, Number(process.env.HTTP_CONNECTIONS) || 4)),
   botState,
   botStateFile,
   orderHistory,

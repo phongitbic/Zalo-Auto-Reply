@@ -32,10 +32,14 @@ class OrderServicePlugin : Plugin() {
 
     @PluginMethod
     fun start(call: PluginCall) {
-        val serverUrl = call.getString("serverUrl")?.trimEnd('/')
+        val serverUrl = ServerUrlPolicy.normalize(call.getString("serverUrl"))
         val token = call.getString("token")
-        if (serverUrl.isNullOrBlank() || !serverUrl.startsWith("https://") || token.isNullOrBlank()) {
-            call.reject("Cần địa chỉ VPS HTTPS và token quản trị")
+        if (serverUrl == null) {
+            call.reject("Địa chỉ máy chủ phải là HTTPS, hoặc HTTP dùng IP mạng nội bộ/Tailscale")
+            return
+        }
+        if (token.isNullOrBlank()) {
+            call.reject("Cần token quản trị")
             return
         }
 

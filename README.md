@@ -1,16 +1,18 @@
 # Zalo Auto Reply
 
-Hệ thống nhận tin nhắn nhóm bằng Socket của Zalo và gửi `@Tên người gửi Ok` qua HTTP Keep-Alive. Bot chạy độc lập trên VPS; web/Android chỉ điều khiển và nhận sự kiện sau khi Zalo xác nhận gửi thành công.
+Hệ thống nhận tin nhắn nhóm bằng Socket của Zalo và gửi `@Tên người gửi Ok` qua HTTP Keep-Alive. Bot chạy độc lập trên máy chủ; web/Android chỉ điều khiển và nhận sự kiện sau khi Zalo xác nhận gửi thành công.
 
 > `zca-js` là API cá nhân không chính thức. Tài khoản có thể bị hạn chế hoặc khóa. Chỉ chạy một listener cho tài khoản và không mở Zalo Web đồng thời.
 
 ## Thành phần
 
-- `server/`: Node.js, Socket.IO, QR đăng nhập, trạng thái bot và lịch sử đơn trên VPS.
+- `server/`: Bun 1.4 + Elysia, Socket.IO chạy trên Bun Engine, QR đăng nhập, trạng thái bot và lịch sử đơn trên máy chủ.
 - `client/`: React/Vite, giao diện web và bundle dùng trong Capacitor.
 - `android/`: ứng dụng Android native, foreground service, thông báo, TTS và nút nổi.
 
-Ba trạng thái nhận đơn được lưu tại VPS:
+Entry production duy nhất là `server/src/index.js`, chạy bằng Bun và Elysia. Không chạy hai instance vì sẽ tạo hai listener cho cùng tài khoản Zalo.
+
+Ba trạng thái nhận đơn được lưu tại máy chủ:
 
 - `STOPPED`: listener vẫn sống nhưng không trả lời tin mới.
 - `ALL`: trả lời mọi tin hợp lệ trong nhóm cho phép.
@@ -20,14 +22,15 @@ Ba trạng thái nhận đơn được lưu tại VPS:
 
 ## Chạy và kiểm thử local
 
-Yêu cầu Node.js 22+ nếu cần build Android/Capacitor; riêng server hỗ trợ Node.js 20.19+.
+Yêu cầu Bun 1.4.1 trở lên; build Android cần thêm JDK 21 và Android SDK.
 
 ```powershell
-npm install
+irm bun.sh/install.ps1 | iex
+bun install --frozen-lockfile
 Copy-Item server/.env.example server/.env
-npm test
-npm run build
-npm run dev
+bun test
+bun run build
+bun run dev
 ```
 
 Trước khi chạy, điền ít nhất `ALLOWED_GROUP_IDS` và `ADMIN_KEY` trong `server/.env`. `ADMIN_KEY` phải là chuỗi ngẫu nhiên từ 32 ký tự; cấu hình production sẽ từ chối khởi động nếu khóa trống, ngắn hoặc còn giá trị mẫu cũ.
@@ -51,7 +54,6 @@ Các biến quan trọng nằm trong [server/.env.example](server/.env.example):
 - `ORDER_HISTORY_FILE`: lịch sử các đơn Zalo đã xác nhận gửi thành công để đồng bộ lại app.
 - `MAX_SOCKET_CONNECTIONS`: giới hạn client đồng thời cho một instance.
 - `KEEP_ALIVE_INTERVAL_MS`: heartbeat Zalo, tối thiểu 5 giây.
-- `HTTP_CONNECTIONS`: số kết nối tối đa trong cùng HTTP Keep-Alive pool; mặc định 4 để heartbeat không chặn lệnh gửi.
 - `REDIS_URL`: địa chỉ Redis 5, mặc định `redis://127.0.0.1:6379`; nếu có `requirepass` dùng `redis://:MAT_KHAU_URL_ENCODED@127.0.0.1:6379`.
 - `REDIS_PREFIX`: tiền tố khóa khi nhiều ứng dụng dùng chung Redis.
 - `REDIS_CHANNEL`: kênh Pub/Sub đồng bộ cấu hình, mặc định `priority_routes_updated`.
@@ -84,16 +86,22 @@ Sau khi sửa, chạy `sudo systemctl restart redis-server`. `redis-cli` phải 
 Kiểm tra đúng toàn bộ nhóm lệnh và Pub/Sub mà ứng dụng cần bằng chính cấu hình trong `server/.env`:
 
 ```bash
-node -v
+bun --version
 sudo systemctl status redis-server --no-pager
 redis-cli -h 127.0.0.1 ping
-npm run redis:check -w server
+bun run --cwd server redis:check
 pm2 logs zalo-auto-reply --lines 100
 ```
 
-Server cần Node.js `20.19.0` trở lên. `ECONNREFUSED` thường là dịch vụ chưa chạy hoặc sai host/cổng; `NOAUTH`/`WRONGPASS` là sai `requirepass`; lỗi `unknown command HELLO` cho biết tiến trình vẫn đang chạy code cũ chưa ép RESP2. Hệ thống chỉ dùng các lệnh có trong Redis 5: `GET`, `SET`, `DEL`, `INCR`, `MULTI/EXEC`, `ZADD`, `ZRANGEBYSCORE`, `ZREMRANGEBYSCORE`, `PING`, `PUBLISH` và `SUBSCRIBE`. Khi Redis tạm mất kết nối, bot tiếp tục dùng cấu hình gần nhất trong RAM và tự nối lại; mất riêng Pub/Sub không còn bị báo nhầm là mất kênh lệnh và bot tuyệt đối không tự chuyển từ `PRIORITY` sang `ALL`.
+Server cần Bun `1.4.1` trở lên. `ECONNREFUSED` thường là dịch vụ chưa chạy hoặc sai host/cổng; `NOAUTH`/`WRONGPASS` là sai `requirepass`; lỗi `unknown command HELLO` cho biết tiến trình vẫn đang chạy code cũ chưa ép RESP2. Hệ thống chỉ dùng các lệnh có trong Redis 5: `GET`, `SET`, `DEL`, `INCR`, `MULTI/EXEC`, `ZADD`, `ZRANGEBYSCORE`, `ZREMRANGEBYSCORE`, `PING`, `PUBLISH` và `SUBSCRIBE`. Khi Redis tạm mất kết nối, bot tiếp tục dùng cấu hình gần nhất trong RAM và tự nối lại; mất riêng Pub/Sub không còn bị báo nhầm là mất kênh lệnh và bot tuyệt đối không tự chuyển từ `PRIORITY` sang `ALL`.
 
-Đặt Nginx hoặc Caddy trước cổng `3001` để cung cấp HTTPS/WSS. Android cố ý từ chối URL HTTP và manifest chặn cleartext traffic.
+### Kết nối Android với máy chủ
+
+Không cần có website hay tên miền khi điện thoại và máy chạy backend ở cùng mạng Wi-Fi. Trong ứng dụng Android, nhập địa chỉ IP LAN của máy chạy backend theo dạng `http://192.168.1.10:3001` và nhập `ADMIN_KEY` trong `server/.env`. Không nhập `localhost`, vì trên điện thoại địa chỉ đó là chính điện thoại chứ không phải máy tính.
+
+Backend phải lắng nghe trên `0.0.0.0`, và tường lửa của máy chủ phải cho phép điện thoại truy cập cổng `3001` trong mạng riêng. Ứng dụng cho phép HTTP với IP LAN (`10.x`, `172.16-31.x`, `192.168.x`), loopback, link-local và IP Tailscale `100.64-127.x`; HTTP tới IP Internet công cộng bị từ chối để tránh lộ token quản trị.
+
+Nếu điện thoại kết nối qua Internet công cộng, hãy đặt Nginx/Caddy trước cổng `3001` để dùng HTTPS/WSS, hoặc đưa điện thoại và máy chủ vào cùng mạng riêng Tailscale. Địa chỉ máy chủ vẫn bắt buộc trên Android: token chỉ dùng để xác thực, không chứa thông tin vị trí của backend.
 
 ### QR đăng nhập
 
@@ -115,29 +123,127 @@ Bộ lọc chuẩn hóa chữ hoa/thường, dấu tiếng Việt, dấu câu v�
 
 ## Chạy production bằng PM2
 
-```powershell
-npm ci
-npm test
-npm run build
-npm install --global pm2
+Trên Ubuntu 20.04, cài Bun và dependency khóa bởi `bun.lock`:
+
+```bash
+sudo apt update
+sudo apt install -y curl unzip
+curl -fsSL https://bun.sh/install | bash
+source ~/.bashrc
+cd /duong-dan/zalo-auto-reply
+bun install --frozen-lockfile
+bun test
+bun run build
+```
+
+Nếu VPS đã có PM2, bảo đảm `bun` có trong `PATH` của shell rồi chạy:
+
+```bash
+pm2 start ecosystem.config.cjs
+pm2 save
+pm2 status
+curl -fsS http://127.0.0.1:3001/health
+```
+
+Nếu PM2 đang giữ định nghĩa tiến trình cũ cùng tên, chuyển chắc chắn sang entry Bun bằng một lần dừng ngắn; lệnh `pm2 delete` chỉ xóa định nghĩa tiến trình, không xóa `.env`, session hay dữ liệu:
+
+```bash
+pm2 delete zalo-auto-reply
 pm2 start ecosystem.config.cjs
 pm2 save
 ```
 
-Trên VPS Linux, chạy thêm `pm2 startup` rồi thực thi đúng lệnh PM2 in ra để tự khởi động cùng hệ điều hành. Windows không có init system tương ứng; nếu dùng Windows làm server, hãy tạo Task Scheduler chạy `pm2 resurrect` khi đăng nhập.
+Nếu chưa có PM2, có thể cài bằng `bun add --global pm2`; sau đó chạy `pm2 startup` và thực thi đúng lệnh PM2 in ra để tự khởi động cùng hệ điều hành. `ecosystem.config.cjs` dùng `interpreter: "bun"` và entry `server/src/index.js`.
 
-Nếu PowerShell báo `pm2 is not recognized`, đóng/mở lại terminal sau khi cài. Có thể kiểm tra thư mục binary bằng `npm config get prefix`, hoặc chạy ngay bằng `npx pm2 start ecosystem.config.cjs` rồi `npx pm2 save`.
+Nếu PowerShell báo `bun` hoặc `pm2` không được nhận diện, đóng/mở lại terminal sau khi cài và kiểm tra `C:\Users\<tên-user>\.bun\bin` đã nằm trong `PATH`. Windows không có init system như Linux; nếu dùng Windows làm server, hãy tạo Task Scheduler chạy `pm2 resurrect` khi đăng nhập.
 
 Sau khi cập nhật code:
 
-```powershell
-npm ci
-npm test
-npm run build
-pm2 restart ecosystem.config.cjs --update-env
+```bash
+bun install --frozen-lockfile
+bun test
+bun run build
+pm2 startOrRestart ecosystem.config.cjs --update-env
 pm2 status
 pm2 logs zalo-auto-reply --lines 100
+curl -fsS http://127.0.0.1:3001/health
 ```
+
+Dùng `startOrRestart` thay vì chạy hai tiến trình song song: một tài khoản chỉ được có một Zalo listener. Đây là cập nhật gần như không gián đoạn nhưng tránh nguy cơ hai bot cùng trả lời một tin.
+
+### Chạy bằng systemd, không cần PM2
+
+Tạo `/etc/systemd/system/zalo-auto-reply.service` và thay `User`, `WorkingDirectory`, `ExecStart` bằng đường dẫn thật:
+
+```ini
+[Unit]
+Description=Zalo Auto Reply (Bun + Elysia)
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/zalo-auto-reply
+Environment=NODE_ENV=production
+ExecStart=/home/ubuntu/.bun/bin/bun --no-env-file server/src/index.js
+Restart=always
+RestartSec=2
+TimeoutStopSec=12
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now zalo-auto-reply
+sudo systemctl status zalo-auto-reply --no-pager
+journalctl -u zalo-auto-reply -n 100 --no-pager
+```
+
+## Hợp đồng API và realtime
+
+Tất cả API `/api/*` yêu cầu `Authorization: Bearer <ADMIN_KEY>` hoặc `x-admin-key`. `GET /health` chỉ trả `{ "status": "ok" }` và không tiết lộ cấu hình.
+
+| Method | Path | Kết quả chính |
+| --- | --- | --- |
+| GET | `/health` | Health check 200 |
+| GET | `/api/status` | Snapshot bot, mode, tuyến, Redis và timings |
+| GET | `/api/bootstrap` | `{ status, orders }` để web/APK đồng bộ ban đầu |
+| GET | `/api/orders?limit=100` | Lịch sử gửi thành công, giới hạn 1–500 |
+| GET | `/api/zalo/qr` | Ảnh QR không cache hoặc JSON 404 |
+| POST | `/api/bot/control` | `{ action: "start"|"stop", mode: "all"|"priority" }` |
+| POST | `/api/bot/enabled` | Tương thích client cũ với `{ enabled }` |
+| POST | `/api/bot/priority-only` | Tương thích client cũ với `{ enabled }` |
+| POST | `/api/settings/priority-routes/preview` | Kiểm tra file TXT, không thay đổi cấu hình |
+| POST | `/api/settings/priority-routes/import` | Nhập file TXT, trả 201 khi hợp lệ |
+| POST | `/api/settings/priority-routes` | Thêm một tuyến, trả 201 |
+| PATCH | `/api/settings/priority-routes` | Bật/tắt toàn bộ tuyến |
+| PATCH | `/api/settings/priority-routes/:id` | Sửa một tuyến |
+| DELETE | `/api/settings/priority-routes/:id` | Xóa một tuyến |
+| GET | `/api/settings/priority-routes/export` | Tải JSON tuyến dưới dạng attachment |
+
+Dashboard và APK tiếp tục kết nối Socket.IO tại `/socket.io/`, chỉ dùng transport `websocket`, token nằm trong `auth.token` hoặc header `x-admin-key`. Bun Engine chính chủ của Socket.IO được gắn trực tiếp vào Elysia nên client không cần đổi giao thức. Khi kết nối, server gửi `status` và `orders`; trong lúc chạy phát `status`, `stats`, `redis`, `qr`, `ORDER_ACCEPTED` và `ORDER_FAILED`. Sự kiện nội bộ `decision` chỉ dùng cho log khi bật `HOT_PATH_LOGGING`.
+
+Nhóm Zalo hiện được quản lý duy nhất bởi `ALLOWED_GROUP_IDS` trong `.env`; migration không tự thêm API nhóm mới để tránh đổi hành vi production.
+
+## Kết quả xác minh
+
+Backend chỉ có một đường production Bun + Elysia. Test bao phủ API, auth, Socket.IO, mode, tuyến, dedupe, Redis coordinator, giới hạn body và HTTP Keep-Alive native. React/Vite build thành công; Capacitor sync và APK release đã được kiểm tra với chữ ký APK Signature Scheme v2 hợp lệ.
+
+Luồng yêu cầu/tạo QR thật trên Bun đã thành công. Redis local có thể kiểm tra bằng `bun run --cwd server redis:check`; trên VPS Redis 5 cũng dùng đúng lệnh này để xác nhận dịch vụ và mật khẩu thật.
+
+Các file migration chính:
+
+- `server/src/index.js`: entry Bun/Elysia và graceful shutdown.
+- `server/src/bun-app.js`: ghép Elysia, CORS, static web và health check.
+- `server/src/api-routes.js`: toàn bộ HTTP API giữ nguyên contract.
+- `server/src/realtime.js`: Bun Engine + Socket.IO tương thích web/APK.
+- `server/src/backend-runtime.js`: bot, store, Redis và mutation tuần tự.
+- `server/src/auth.js`: Bearer/x-admin-key constant-time.
+- `bun.lock`: dependency lock production.
 
 ## Android
 
@@ -148,7 +254,7 @@ pm2 logs zalo-auto-reply --lines 100
 Cài JDK 21 và Android SDK Platform 36/Build Tools 36, tạo `android/local.properties` trỏ tới SDK, rồi chạy:
 
 ```powershell
-npm run android:debug
+bun run android:debug
 ```
 
 APK debug nằm tại `android/app/build/outputs/apk/debug/app-debug.apk`.
@@ -159,7 +265,7 @@ APK debug nằm tại `android/app/build/outputs/apk/debug/app-debug.apk`.
 
 ```powershell
 .\scripts\create-release-keystore.ps1
-npm run android:release
+bun run android:release
 ```
 
 Script tạo `android/signing/zalo-auto-reply-release.jks` và `android/signing.properties`; cả hai đều bị Git bỏ qua. Hãy sao lưu an toàn cả hai file. Mất keystore hoặc mật khẩu sẽ không thể ký bản cập nhật cùng danh tính ứng dụng.
@@ -171,7 +277,7 @@ $env:ANDROID_KEYSTORE_PATH='đường-dẫn-tuyệt-đối-tới-keystore'
 $env:ANDROID_KEYSTORE_PASSWORD='mật-khẩu-keystore'
 $env:ANDROID_KEY_ALIAS='alias'
 $env:ANDROID_KEY_PASSWORD='mật-khẩu-key'
-npm run android:release
+bun run android:release
 ```
 
 Build release cố ý thất bại nếu không có cấu hình ký cục bộ hoặc thiếu biến ký để không tạo nhầm APK chưa ký. APK nằm tại `android/app/build/outputs/apk/release/app-release.apk`.
@@ -179,7 +285,7 @@ Build release cố ý thất bại nếu không có cấu hình ký cục bộ h
 ## Kiến trúc độ trễ thấp
 
 - Zalo Socket nhận sự kiện; không polling tin nhắn.
-- Một HTTP Agent/Keep-Alive pool giữ kết nối sống; tối đa 4 kết nối tránh heartbeat hoặc nhiều đơn đồng thời chặn nhau.
+- `fetch` native của Bun tự dùng connection pooling và HTTP Keep-Alive; heartbeat không chiếm một pool nhỏ riêng nên không xếp hàng trước lệnh gửi.
 - Allowlist dùng `Set`; tuyến đã chuẩn hóa nằm trong RAM.
 - Bộ dò tuyến dùng cây token và chỉ mục ngược, nên không quét toàn bộ 5.000 tuyến cho mỗi tin.
 - Dedupe diễn ra trước khi so tuyến; các message gần nhất được khôi phục từ Redis và lịch sử sau restart.
@@ -189,4 +295,4 @@ Build release cố ý thất bại nếu không có cấu hình ký cục bộ h
 
 Không thể cam kết 0 ms vì vẫn phụ thuộc mạng và máy chủ Zalo. Các chỉ số `normalizationMs`, `routeMatchMs`, `dispatchMs`, `networkMs` và `totalMs` tách rõ thời gian xử lý local khỏi thời gian mạng.
 
-Có thể đo lại đường xử lý local độc lập với mạng bằng `npm run benchmark -w server`.
+Có thể đo lại đường xử lý local độc lập với mạng bằng `bun run --cwd server benchmark`. Đo HTTP của server đang chạy bằng `bun run --cwd server benchmark:http http://127.0.0.1:3001`.
