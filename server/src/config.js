@@ -57,6 +57,7 @@ export const config = {
   priorityRoutes: loadPriorityRoutes(priorityRoutesFile),
   hotPathLogging: process.env.HOT_PATH_LOGGING === "true",
   keepAliveIntervalMs: Math.max(5000, Number(process.env.KEEP_ALIVE_INTERVAL_MS) || 15000),
+  groupPreconnectIntervalMs: Math.max(5000, Number(process.env.GROUP_PRECONNECT_INTERVAL_MS) || 5000),
   botState,
   botStateFile,
   orderHistory,

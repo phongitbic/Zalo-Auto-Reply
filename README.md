@@ -54,6 +54,7 @@ Các biến quan trọng nằm trong [server/.env.example](server/.env.example):
 - `ORDER_HISTORY_FILE`: lịch sử các đơn Zalo đã xác nhận gửi thành công để đồng bộ lại app.
 - `MAX_SOCKET_CONNECTIONS`: giới hạn client đồng thời cho một instance.
 - `KEEP_ALIVE_INTERVAL_MS`: heartbeat Zalo, tối thiểu 5 giây.
+- `GROUP_PRECONNECT_INTERVAL_MS`: chuẩn bị sẵn DNS/TCP/TLS tới đúng host gửi nhóm, mặc định 5 giây; không tạo request API Zalo giả.
 - `REDIS_URL`: địa chỉ Redis 5, mặc định `redis://127.0.0.1:6379`; nếu có `requirepass` dùng `redis://:MAT_KHAU_URL_ENCODED@127.0.0.1:6379`.
 - `REDIS_PREFIX`: tiền tố khóa khi nhiều ứng dụng dùng chung Redis.
 - `REDIS_CHANNEL`: kênh Pub/Sub đồng bộ cấu hình, mặc định `priority_routes_updated`.
@@ -296,3 +297,11 @@ Build release cố ý thất bại nếu không có cấu hình ký cục bộ h
 Không thể cam kết 0 ms vì vẫn phụ thuộc mạng và máy chủ Zalo. Các chỉ số `normalizationMs`, `routeMatchMs`, `dispatchMs`, `networkMs` và `totalMs` tách rõ thời gian xử lý local khỏi thời gian mạng.
 
 Có thể đo lại đường xử lý local độc lập với mạng bằng `bun run --cwd server benchmark`. Đo HTTP của server đang chạy bằng `bun run --cwd server benchmark:http http://127.0.0.1:3001`.
+
+Sau khi VPS có thêm đơn thật, phân tích tối đa 100 lần gửi gần nhất bằng:
+
+```bash
+bun run --cwd server latency:report -- 100
+```
+
+Báo cáo tách `total`, `zaloNetwork`, `dispatch`, các lần gửi liên tiếp và lần gửi sau ít nhất 60 giây không hoạt động. Chỉ cân nhắc proxy sau khi có tối thiểu 50 mẫu; so sánh `p50`, `p95`, `p99` thay vì chọn theo lần nhanh nhất.

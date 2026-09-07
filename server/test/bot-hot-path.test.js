@@ -230,6 +230,26 @@ test("starts one Zalo keep-alive request immediately without overlapping", async
   await pendingRequest;
 });
 
+test("preconnects the group send origin once and does not call a Zalo API", () => {
+  const origins = [];
+  const bot = new ZaloReplyBot({
+    allowedGroupIds: new Set(),
+    replyText: "Ok",
+    sessionFile: "unused",
+    groupPreconnectIntervalMs: 60000,
+    preconnect: (origin) => origins.push(origin),
+  });
+  bot.api = {
+    zpwServiceMap: { group: ["https://group.example.test/api/group"] },
+  };
+
+  bot.startGroupPreconnect();
+  bot.startGroupPreconnect();
+
+  assert.deepEqual(origins, ["https://group.example.test"]);
+  bot.stopGroupPreconnect();
+});
+
 test("reuses a native Bun HTTP Keep-Alive connection for sequential requests", async () => {
   const sockets = new Set();
   const server = http.createServer((_req, res) => res.end("ok"));

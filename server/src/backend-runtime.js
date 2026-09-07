@@ -38,6 +38,7 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
     configUpdatedAt: config.botState.updatedAt ?? null,
     hotPathLogging: config.hotPathLogging,
     keepAliveIntervalMs: config.keepAliveIntervalMs,
+    groupPreconnectIntervalMs: config.groupPreconnectIntervalMs,
     emit: (event, payload) => {
       if (event === "ORDER_ACCEPTED") {
         recordOrder(payload);

@@ -8,7 +8,8 @@
     "test": "bun --no-env-file test",
     "redis:check": "bun --no-env-file scripts/check-redis.js",
     "benchmark": "bun --no-env-file scripts/benchmark-hot-path.js",
-    "benchmark:http": "bun --no-env-file scripts/benchmark-http.js"
+    "benchmark:http": "bun --no-env-file scripts/benchmark-http.js",
+    "latency:report": "bun --no-env-file scripts/report-latency.js"
   },
   "engines": {
     "bun": ">=1.4.1"

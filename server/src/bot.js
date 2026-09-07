@@ -72,12 +72,14 @@ export class ZaloReplyBot {
     priorityRoutes = [],
     hotPathLogging = false,
     keepAliveIntervalMs = 15000,
+    groupPreconnectIntervalMs = 5000,
     keepAliveRequestTimeoutMs = 5000,
     httpRequestTimeoutMs = 30000,
     reconnectBaseDelayMs = 1000,
     reconnectMaxDelayMs = 30000,
     recentMessages = [],
     configUpdatedAt = null,
+    preconnect = typeof fetch.preconnect === "function" ? fetch.preconnect.bind(fetch) : null,
     emit = () => {},
   }) {
     this.allowedGroupIds = allowedGroupIds;
@@ -89,10 +91,13 @@ export class ZaloReplyBot {
     this.compiledPriorityRoutes = compilePriorityRoutes(priorityRoutes);
     this.hotPathLogging = hotPathLogging;
     this.keepAliveIntervalMs = keepAliveIntervalMs;
+    this.groupPreconnectIntervalMs = groupPreconnectIntervalMs;
     this.keepAliveRequestTimeoutMs = keepAliveRequestTimeoutMs;
     this.httpRequestTimeoutMs = httpRequestTimeoutMs;
     this.keepAliveTimer = null;
     this.keepAliveInFlight = false;
+    this.groupPreconnectTimer = null;
+    this.preconnect = preconnect;
     this.reconnectBaseDelayMs = reconnectBaseDelayMs;
     this.reconnectMaxDelayMs = reconnectMaxDelayMs;
     this.reconnectAttempts = 0;
@@ -201,6 +206,7 @@ export class ZaloReplyBot {
         this.status = "error";
         this.publish();
       });
+      this.startGroupPreconnect();
       api.listener.start({ retryOnClose: true });
       this.startKeepAlive();
     } catch (error) {
@@ -253,11 +259,38 @@ export class ZaloReplyBot {
     this.keepAliveTimer = null;
   }
 
+  preconnectGroupTransport() {
+    const groupServiceUrl = this.api?.zpwServiceMap?.group?.[0];
+    if (!groupServiceUrl || !this.preconnect) return false;
+    try {
+      this.preconnect(new URL(groupServiceUrl).origin);
+      return true;
+    } catch (error) {
+      if (this.hotPathLogging) console.warn("Zalo group preconnect failed:", error.message);
+      return false;
+    }
+  }
+
+  startGroupPreconnect() {
+    if (this.groupPreconnectTimer || !this.preconnectGroupTransport()) return;
+    this.groupPreconnectTimer = setInterval(
+      () => this.preconnectGroupTransport(),
+      this.groupPreconnectIntervalMs
+    );
+    this.groupPreconnectTimer.unref?.();
+  }
+
+  stopGroupPreconnect() {
+    if (this.groupPreconnectTimer) clearInterval(this.groupPreconnectTimer);
+    this.groupPreconnectTimer = null;
+  }
+
   async stop() {
     this.shuttingDown = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     this.stopKeepAlive();
+    this.stopGroupPreconnect();
 
     const api = this.api;
     this.api = null;
