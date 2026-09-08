@@ -70,4 +70,5 @@ export const config = {
   redisHeartbeatMs: Math.max(5000, Number(process.env.REDIS_HEARTBEAT_MS) || 15000),
   redisConnectTimeoutMs: Math.max(1000, Number(process.env.REDIS_CONNECT_TIMEOUT_MS) || 5000),
   redisPingIntervalMs: Math.max(1000, Number(process.env.REDIS_PING_INTERVAL_MS) || 10000),
+  proxyAgent: process.env.ZALO_PROXY_AGENT || '',
 };

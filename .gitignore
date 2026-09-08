@@ -14,3 +14,4 @@ android/signing.properties
 *.jks
 *.keystore
 .tmp/
+.agents

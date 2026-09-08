@@ -10,6 +10,7 @@ import {
   normalizeLocation,
   summarizePriorityRoutes,
 } from "./priority-routes.js";
+import { config } from "./config.js";
 
 const getMessageId = (message) =>
   message.data?.msgId ?? message.data?.cliMsgId ?? message.data?.globalMsgId;
@@ -80,7 +81,7 @@ export class ZaloReplyBot {
     recentMessages = [],
     configUpdatedAt = null,
     preconnect = typeof fetch.preconnect === "function" ? fetch.preconnect.bind(fetch) : null,
-    emit = () => {},
+    emit = () => { },
   }) {
     this.allowedGroupIds = allowedGroupIds;
     this.replyText = replyText;
@@ -98,6 +99,8 @@ export class ZaloReplyBot {
     this.keepAliveInFlight = false;
     this.groupPreconnectTimer = null;
     this.groupServiceOrigin = null;
+    this.groupWarmUpInFlight = false;
+    this.lastGroupActivityAt = 0;
     this.preconnect = preconnect;
     this.reconnectBaseDelayMs = reconnectBaseDelayMs;
     this.reconnectMaxDelayMs = reconnectMaxDelayMs;
@@ -177,7 +180,12 @@ export class ZaloReplyBot {
     this.publish();
 
     try {
-      const zalo = new Zalo({ logging: false, checkUpdate: false, polyfill: this.httpFetch });
+      const zalo = new Zalo({
+        logging: false,
+        checkUpdate: false,
+        polyfill: this.httpFetch,
+        agent: config.proxyAgent,
+      });
       const api = await this.login(zalo);
       if (this.shuttingDown) return;
       this.stopKeepAlive();
@@ -266,14 +274,17 @@ export class ZaloReplyBot {
   }
 
   preconnectGroupTransport() {
-    if (!this.preconnect) return false;
     try {
       if (!this.groupServiceOrigin) {
         const groupServiceUrl = this.api?.zpwServiceMap?.group?.[0];
         if (!groupServiceUrl) return false;
         this.groupServiceOrigin = new URL(groupServiceUrl).origin;
       }
-      this.preconnect(this.groupServiceOrigin);
+      if (this.preconnect) {
+        try {
+          this.preconnect(this.groupServiceOrigin);
+        } catch (_) { }
+      }
       return true;
     } catch (error) {
       if (this.hotPathLogging) console.warn("Zalo group preconnect failed:", error.message);
@@ -283,16 +294,35 @@ export class ZaloReplyBot {
 
   startGroupPreconnect() {
     if (this.groupPreconnectTimer || !this.preconnectGroupTransport()) return;
-    this.groupPreconnectTimer = setInterval(
-      () => this.preconnectGroupTransport(),
-      this.groupPreconnectIntervalMs
-    );
+
+    const warmUp = async () => {
+      this.preconnectGroupTransport();
+      if (this.groupWarmUpInFlight || !this.groupServiceOrigin) return;
+
+      // Option A1 (Adaptive): Tạm dừng nếu vừa có hoạt động nhắn tin trong 3 giây qua
+      if (performance.now() - this.lastGroupActivityAt < 3000) return;
+
+      this.groupWarmUpInFlight = true;
+      try {
+        await this.httpFetch(`${this.groupServiceOrigin}/`, {
+          method: "HEAD",
+          signal: AbortSignal.timeout(2500),
+        });
+      } catch (error) {
+        if (this.hotPathLogging) console.warn("Zalo group warm-up failed:", error.message);
+      } finally {
+        this.groupWarmUpInFlight = false;
+      }
+    };
+
+    this.groupPreconnectTimer = setInterval(warmUp, this.groupPreconnectIntervalMs);
     this.groupPreconnectTimer.unref?.();
   }
 
   stopGroupPreconnect() {
     if (this.groupPreconnectTimer) clearInterval(this.groupPreconnectTimer);
     this.groupPreconnectTimer = null;
+    this.groupWarmUpInFlight = false;
   }
 
   async stop() {
@@ -325,7 +355,7 @@ export class ZaloReplyBot {
     return zalo.loginQR({ qrPath: this.qrFile }, async (event) => {
       if (event.type === LoginQRCallbackEventType.QRCodeGenerated) {
         await event.actions.saveToFile();
-        await fs.chmod(this.qrFile, 0o600).catch(() => {});
+        await fs.chmod(this.qrFile, 0o600).catch(() => { });
         this.qrAvailable = true;
         this.status = "qr_required";
         this.emit("qr", { available: true, updatedAt: new Date().toISOString() });
@@ -338,7 +368,7 @@ export class ZaloReplyBot {
         try {
           await fs.writeFile(tempSessionFile, JSON.stringify(event.data), { mode: 0o600 });
           await fs.rename(tempSessionFile, this.sessionFile);
-          await fs.chmod(this.sessionFile, 0o600).catch(() => {});
+          await fs.chmod(this.sessionFile, 0o600).catch(() => { });
         } finally {
           await fs.unlink(tempSessionFile).catch((error) => {
             if (error.code !== "ENOENT") throw error;
@@ -367,6 +397,7 @@ export class ZaloReplyBot {
 
   onMessage(message) {
     const receivedAt = performance.now();
+    this.lastGroupActivityAt = receivedAt;
     const receivedAtIso = new Date().toISOString();
     this.stats.received += 1;
     const threadId = String(message.threadId);
