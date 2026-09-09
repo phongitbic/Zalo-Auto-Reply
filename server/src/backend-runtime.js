@@ -12,19 +12,10 @@ import { RedisCoordinator } from "./redis-coordinator.js";
 
 export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
   const stateStore = new PersistentJsonStore(config.botStateFile, config.botState);
-  const successfulHistory = config.orderHistory.filter((item) => item.status === "success");
-  const historyStore = new PersistentJsonStore(config.orderHistoryFile, successfulHistory);
   const routesStore = new PersistentJsonStore(config.priorityRoutesFile, config.priorityRoutes);
   let priorityRoutes = config.priorityRoutes;
   let priorityRoutesMutation = Promise.resolve();
   let redisCoordinator;
-
-  const recordOrder = (order) => {
-    void historyStore.update((records) => {
-      if (records.some((item) => item.eventId === order.eventId)) return records;
-      return [order, ...records].slice(0, config.maxOrderHistory);
-    }).catch((error) => console.error("Saving order history failed:", error));
-  };
 
   const bot = new ZaloReplyBot({
     allowedGroupIds: config.allowedGroupIds,
@@ -34,14 +25,12 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
     enabled: config.enabled,
     priorityOnly: config.priorityOnly,
     priorityRoutes,
-    recentMessages: successfulHistory,
     configUpdatedAt: config.botState.updatedAt ?? null,
     hotPathLogging: config.hotPathLogging,
     keepAliveIntervalMs: config.keepAliveIntervalMs,
     groupPreconnectIntervalMs: config.groupPreconnectIntervalMs,
     emit: (event, payload) => {
       if (event === "ORDER_ACCEPTED") {
-        recordOrder(payload);
         void redisCoordinator?.recordProcessed(payload.groupId, payload.messageId);
       }
       if (event === "decision") {
@@ -136,20 +125,20 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
       error.code = "INVALID_ROUTE";
       throw error;
     }
-    const originAliases = body.originAliases ?? existing.originAliases ?? [];
-    const destinationAliases = body.destinationAliases ?? existing.destinationAliases ?? [];
-    if (!Array.isArray(originAliases) || !Array.isArray(destinationAliases)) {
-      const error = new Error("Danh sách tên thay thế không hợp lệ.");
+    const prices = body.prices ?? existing.prices ?? [];
+    const excludedKeywords = body.excludedKeywords ?? existing.excludedKeywords ?? [];
+    if (!Array.isArray(prices) || !Array.isArray(excludedKeywords)) {
+      const error = new Error("Danh sách giá tiền hoặc từ khóa bị loại không hợp lệ.");
       error.code = "INVALID_ROUTE";
       throw error;
     }
-    if (originAliases.length > 50 || destinationAliases.length > 50) {
-      const error = new Error("Mỗi địa điểm có tối đa 50 tên thay thế.");
+    if (prices.length > 50 || excludedKeywords.length > 50) {
+      const error = new Error("Mỗi bộ lọc có tối đa 50 giá trị.");
       error.code = "INVALID_ROUTE";
       throw error;
     }
-    if ([...originAliases, ...destinationAliases].some((alias) => String(alias).trim().length > 200)) {
-      const error = new Error("Mỗi tên thay thế tối đa 200 ký tự.");
+    if ([...prices, ...excludedKeywords].some((term) => String(term).trim().length > 200)) {
+      const error = new Error("Mỗi giá tiền hoặc từ khóa bị loại tối đa 200 ký tự.");
       error.code = "INVALID_ROUTE";
       throw error;
     }
@@ -158,9 +147,8 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
       origin: body.origin ?? existing.origin,
       destination: body.destination ?? existing.destination,
       enabled: body.enabled ?? existing.enabled ?? true,
-      twoWay: body.twoWay ?? existing.twoWay ?? true,
-      originAliases,
-      destinationAliases,
+      prices,
+      excludedKeywords,
       updatedAt: new Date().toISOString(),
     });
   };
@@ -169,8 +157,7 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
     bot,
     redisCoordinator,
     snapshot: () => bot.snapshot(),
-    bootstrap: () => ({ status: bot.snapshot(), orders: historyStore.value }),
-    orders: (limit) => historyStore.value.slice(0, limit),
+    bootstrap: () => ({ status: bot.snapshot() }),
     getPriorityRoutes: () => priorityRoutes,
     persistControl,
     importPreview,

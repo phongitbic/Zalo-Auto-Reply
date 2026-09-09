@@ -45,12 +45,6 @@ test("Bun/Elysia preserves the HTTP and Socket.IO contracts", { skip: !isBun }, 
     keepAliveIntervalMs: 15000,
     botState: { enabled: true, mode: "all" },
     botStateFile: path.join(directory, "bot-state.json"),
-    orderHistory: [
-      { eventId: "success", status: "success" },
-      { eventId: "failed", status: "failed" },
-    ],
-    orderHistoryFile: path.join(directory, "order-history.json"),
-    maxOrderHistory: 500,
     maxSocketConnections: 1,
     priorityRoutesFile: path.join(directory, "priority-routes.json"),
     redisUrl: "",
@@ -89,8 +83,9 @@ test("Bun/Elysia preserves the HTTP and Socket.IO contracts", { skip: !isBun }, 
     assert.equal(bootstrapResponse.status, 200);
     const bootstrap = await bootstrapResponse.json();
     assert.equal(bootstrap.status.operationMode, "ALL");
-    assert.deepEqual(bootstrap.orders.map((item) => item.eventId), ["success"]);
-    assert.equal((await request("/api/orders?limit=1")).status, 200);
+    assert.equal(bootstrap.orders, undefined);
+    const removedOrdersResponse = await request("/api/orders?limit=1");
+    assert.doesNotMatch(removedOrdersResponse.headers.get("content-type") || "", /application\/json/i);
     assert.equal((await request("/api/zalo/qr")).status, 404);
     assert.equal((await request("/api/bot/control", {
       method: "POST",
@@ -149,15 +144,31 @@ test("Bun/Elysia preserves the HTTP and Socket.IO contracts", { skip: !isBun }, 
 
     const created = await request("/api/settings/priority-routes", {
       method: "POST",
-      body: JSON.stringify({ origin: "Hải Phòng", destination: "Quảng Ninh" }),
+      body: JSON.stringify({
+        origin: "Hải Phòng",
+        destination: "Quảng Ninh",
+        prices: ["200k"],
+        excludedKeywords: ["chó", "mèo"],
+      }),
     });
     assert.equal(created.status, 201);
     const createdBody = await created.json();
     const createdRoute = createdBody.priorityRoutes.find((route) => route.origin === "Hải Phòng");
     assert.ok(createdRoute?.id);
-    assert.equal((await request("/api/settings/priority-routes", {
+    assert.deepEqual(createdRoute.prices, ["200k"]);
+    assert.deepEqual(createdRoute.excludedKeywords, ["chó", "mèo"]);
+    const reverseCreated = await request("/api/settings/priority-routes", {
       method: "POST",
       body: JSON.stringify({ origin: "Quảng Ninh", destination: "Hải Phòng" }),
+    });
+    assert.equal(reverseCreated.status, 201);
+    assert.equal((await request("/api/settings/priority-routes", {
+      method: "POST",
+      body: JSON.stringify({ origin: "Hải Phòng", destination: "Quảng Ninh" }),
+    })).status, 400);
+    assert.equal((await request("/api/settings/priority-routes", {
+      method: "POST",
+      body: JSON.stringify({ origin: "Hải Phòng" }),
     })).status, 400);
 
     assert.equal((await request(`/api/settings/priority-routes/${createdRoute.id}`, {
@@ -176,7 +187,7 @@ test("Bun/Elysia preserves the HTTP and Socket.IO contracts", { skip: !isBun }, 
     const exported = await request("/api/settings/priority-routes/export");
     assert.equal(exported.status, 200);
     assert.match(exported.headers.get("content-disposition"), /^attachment;/);
-    assert.equal((await exported.json()).routes.length, 3);
+    assert.equal((await exported.json()).routes.length, 4);
     assert.equal((await request(`/api/settings/priority-routes/${createdRoute.id}`, {
       method: "DELETE",
     })).status, 200);
@@ -190,11 +201,13 @@ test("Bun/Elysia preserves the HTTP and Socket.IO contracts", { skip: !isBun }, 
       reconnection: false,
       timeout: 3000,
     });
+    let ordersReceived = false;
+    socket.on("orders", () => { ordersReceived = true; });
     const statusPromise = waitForSocket(socket, "status");
-    const ordersPromise = waitForSocket(socket, "orders");
-    const [statusArgs, ordersArgs] = await Promise.all([statusPromise, ordersPromise]);
+    const statusArgs = await statusPromise;
     assert.equal(statusArgs[0].operationMode, "PRIORITY");
-    assert.deepEqual(ordersArgs[0].map((item) => item.eventId), ["success"]);
+    await Bun.sleep(50);
+    assert.equal(ordersReceived, false);
 
     const acceptedPromise = waitForSocket(socket, "ORDER_ACCEPTED");
     realtime.broadcast("ORDER_ACCEPTED", { eventId: "event-live", status: "success" });
@@ -209,6 +222,8 @@ test("Bun/Elysia preserves the HTTP and Socket.IO contracts", { skip: !isBun }, 
     const [limitError] = await waitForSocket(overLimit, "connect_error");
     assert.equal(limitError.message, "Too many connections");
     overLimit.disconnect();
+
+    socket.disconnect();
 
     const rejected = createSocket(baseUrl, {
       auth: { token: "invalid" },

@@ -15,7 +15,7 @@ h2, h3, p { margin-top: 0; }
 p, small, span { color: #9db0c9; }
 strong { color: #f8fbff; }
 
-.app-header, .section-heading, .route-card, .order-card > div, .switch-row {
+.app-header, .section-heading, .route-card, .switch-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -28,7 +28,7 @@ strong { color: #f8fbff; }
 .connection.error i, .connection.disconnected i { background: #fb7185; }
 .icon-button { width: 44px; height: 44px; border: 1px solid #29415e; border-radius: 14px; color: #fff; background: #12233a; font-size: 20px; }
 
-.nav-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 18px; padding: 6px; border: 1px solid #203752; border-radius: 16px; background: #0b192a; }
+.nav-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 18px; padding: 6px; border: 1px solid #203752; border-radius: 16px; background: #0b192a; }
 .nav-tabs button { padding: 11px 8px; border: 0; border-radius: 11px; color: #91a6c0; background: transparent; font-weight: 700; }
 .nav-tabs button.active { color: #fff; background: #245ad6; box-shadow: 0 8px 22px #12388488; }
 
@@ -75,13 +75,8 @@ input:focus, textarea:focus, select:focus { border-color: #4d86ff; box-shadow: 0
 
 .section-heading { margin-bottom: 18px; }
 .section-heading h2 { margin: 4px 0 0; }
-.order-list, .route-list { display: grid; gap: 11px; }
-.order-card, .route-card { margin: 0; padding: 16px; border: 1px solid #263d58; border-radius: 15px; background: #091727; }
-.order-card { display: grid; gap: 7px; }
-.order-card.success { border-left: 4px solid #19bd8c; }
-.order-card.failed { border-left: 4px solid #ef476f; }
-.order-card p { margin: 0; color: #eef6ff; }
-.order-card small { display: block; }
+.route-list { display: grid; gap: 11px; }
+.route-card { margin: 0; padding: 16px; border: 1px solid #263d58; border-radius: 15px; background: #091727; }
 .route-card { position: relative; flex-wrap: wrap; }
 .route-card.enabled { border-color: #159a75; box-shadow: inset 3px 0 #21c994; }
 .route-card.disabled { opacity: .78; }
@@ -147,7 +142,7 @@ code { color: #8eb6ff; overflow-wrap: anywhere; }
   .nav-tabs { border-color: #d4e0ee; background: #e5edf7; }
   .nav-tabs button { color: #536b88; }
   .nav-tabs button.active { color: #fff; }
-  .mode-picker button, .order-card, .route-card { border-color: #d6e1ee; background: #f8fbff; }
+  .mode-picker button, .route-card { border-color: #d6e1ee; background: #f8fbff; }
   .mode-picker button.selected { border-color: #3d79f1; background: #e7f0ff; }
   input, textarea, select { border-color: #cbd9e8; color: #16263c; background: #fff; }
   .hero-status.running { background: linear-gradient(135deg, #ddfff4, #fff); }

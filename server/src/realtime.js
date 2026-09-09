@@ -23,7 +23,6 @@ export const createRealtime = ({ config, tokenMatches }) => {
   });
   io.on("connection", (socket) => {
     socket.emit("status", runtime.snapshot());
-    socket.emit("orders", runtime.orders(config.maxOrderHistory));
   });
 
   return {

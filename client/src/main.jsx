@@ -2,7 +2,6 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { LocalNotifications } from "@capacitor/local-notifications";
-import { io } from "socket.io-client";
 import { normalizeServerUrl, validateNativeServerUrl } from "./server-url.js";
 import "./styles.css";
 
@@ -16,10 +15,9 @@ const emptyRoute = () => ({
   id: null,
   origin: "",
   destination: "",
-  originAliases: "",
-  destinationAliases: "",
+  prices: "",
+  excludedKeywords: "",
   enabled: true,
-  twoWay: true,
 });
 const formatTime = (value) => value ? new Date(value).toLocaleString("vi-VN") : "--";
 const modeText = (status) => !status?.enabled
@@ -28,13 +26,13 @@ const modeText = (status) => !status?.enabled
 
 function App() {
   const socketRef = React.useRef(null);
+  const nativeListenersRef = React.useRef(null);
   const seenEvents = React.useRef(new Set());
   const [serverUrl, setServerUrl] = React.useState(() => storage.get("serverUrl"));
   const [adminToken, setAdminToken] = React.useState(() => isNative ? "" : storage.get("adminToken"));
   const [autoConnectReady, setAutoConnectReady] = React.useState(() => !isNative && Boolean(storage.get("adminToken")));
   const [status, setStatus] = React.useState(null);
   const [qrRevision, setQrRevision] = React.useState("");
-  const [orders, setOrders] = React.useState([]);
   const [connectionState, setConnectionState] = React.useState("disconnected");
   const [page, setPage] = React.useState("dashboard");
   const [notice, setNotice] = React.useState("");
@@ -44,7 +42,6 @@ function App() {
   const [routeFilter, setRouteFilter] = React.useState("all");
   const [routeDraft, setRouteDraft] = React.useState(null);
   const [importDialog, setImportDialog] = React.useState(null);
-  const [overlayEnabled, setOverlayEnabled] = React.useState(false);
   const [notificationSettings, setNotificationSettings] = React.useState(() => {
     try {
       return JSON.parse(storage.get("notificationSettings", "")) || { sound: true, vibrate: true, speech: false };
@@ -76,14 +73,41 @@ function App() {
     const dedupeKey = order.eventId || order.messageId;
     if (!dedupeKey || seenEvents.current.has(dedupeKey)) return;
     seenEvents.current.add(dedupeKey);
-    if (isNative) {
-      await OrderService.handleOrder({ order, settings: notificationSettings }).catch(() => {});
-    } else if ("Notification" in window && Notification.permission === "granted") {
+    if (!isNative && "Notification" in window && Notification.permission === "granted") {
       new Notification("ĐÃ NHẬN ĐƠN THÀNH CÔNG!", {
         body: `${order.senderName || order.groupName}\n${order.originalContent}`,
       });
     }
-  }, [notificationSettings]);
+  }, []);
+
+  const ensureNativeListeners = React.useCallback(() => {
+    if (!isNative) return Promise.resolve([]);
+    if (!nativeListenersRef.current) {
+      nativeListenersRef.current = Promise.all([
+        OrderService.addListener("connectionState", (event) => {
+          const state = ["connected", "disconnected", "error"].includes(event.state) ? event.state : "error";
+          setConnectionState(state);
+          if (state === "connected") setNotice("Đã kết nối và đồng bộ với máy chủ");
+          if (state === "error") {
+            setNotice(String(event.message || "").includes("Unauthorized")
+              ? "Token quản trị không đúng"
+              : "Mất kết nối máy chủ");
+          }
+        }),
+        OrderService.addListener("serverStatus", (serverStatus) => setStatus(serverStatus)),
+        OrderService.addListener("serverStats", (stats) => {
+          setStatus((current) => current ? { ...current, stats } : current);
+        }),
+        OrderService.addListener("serverRedis", (redis) => {
+          setStatus((current) => current ? { ...current, redis } : current);
+        }),
+        OrderService.addListener("zaloQr", (event) => {
+          setQrRevision(event?.updatedAt || String(Date.now()));
+        }),
+      ]);
+    }
+    return nativeListenersRef.current;
+  }, []);
 
   const connect = React.useCallback(async ({ quiet = false } = {}) => {
     const baseUrl = normalizeServerUrl(serverUrl);
@@ -100,51 +124,52 @@ function App() {
     try {
       const bootstrap = await apiFetch("/api/bootstrap");
       setStatus(bootstrap.status);
-      setOrders(bootstrap.orders || []);
-      bootstrap.orders?.forEach((order) => seenEvents.current.add(order.eventId || order.messageId));
       storage.set("serverUrl", baseUrl);
       if (isNative) localStorage.removeItem("adminToken");
       else storage.set("adminToken", adminToken);
       socketRef.current?.disconnect();
-      const socket = io(baseUrl || undefined, {
-        auth: { token: adminToken },
-        transports: ["websocket"],
-        reconnection: true,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 30000,
-        timeout: 10000,
-      });
-      socketRef.current = socket;
-      socket.on("connect", () => {
-        setConnectionState("connected");
-        if (!quiet) setNotice("Đã kết nối và đồng bộ với máy chủ");
-      });
-      socket.on("disconnect", () => setConnectionState("disconnected"));
-      socket.on("connect_error", (error) => {
-        setConnectionState("error");
-        setNotice(error.message === "Unauthorized" ? "Token quản trị không đúng" : "Mất kết nối máy chủ");
-      });
-      socket.on("status", setStatus);
-      socket.on("qr", (event) => setQrRevision(event?.updatedAt || String(Date.now())));
-      socket.on("stats", (stats) => setStatus((current) => current ? { ...current, stats } : current));
-      socket.on("redis", (redis) => setStatus((current) => current ? { ...current, redis } : current));
-      socket.on("orders", (items) => setOrders(items || []));
-      socket.on("ORDER_ACCEPTED", (order) => {
-        setOrders((items) => [order, ...items.filter((item) => item.eventId !== order.eventId)].slice(0, 500));
-        void notifyOrder(order);
-      });
+      socketRef.current = null;
       if (isNative) {
+        await ensureNativeListeners();
         const permission = await LocalNotifications.checkPermissions();
         if (permission.display !== "granted") await LocalNotifications.requestPermissions();
         await OrderService.start({ serverUrl: baseUrl, token: adminToken, settings: notificationSettings });
-      } else if ("Notification" in window && Notification.permission === "default") {
-        await Notification.requestPermission();
+      } else {
+        const { io } = await import("socket.io-client");
+        const socket = io(baseUrl || undefined, {
+          auth: { token: adminToken },
+          transports: ["websocket"],
+          reconnection: true,
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 30000,
+          timeout: 10000,
+        });
+        socketRef.current = socket;
+        socket.on("connect", () => {
+          setConnectionState("connected");
+          if (!quiet) setNotice("Đã kết nối và đồng bộ với máy chủ");
+        });
+        socket.on("disconnect", () => setConnectionState("disconnected"));
+        socket.on("connect_error", (error) => {
+          setConnectionState("error");
+          setNotice(error.message === "Unauthorized" ? "Token quản trị không đúng" : "Mất kết nối máy chủ");
+        });
+        socket.on("status", setStatus);
+        socket.on("qr", (event) => setQrRevision(event?.updatedAt || String(Date.now())));
+        socket.on("stats", (stats) => setStatus((current) => current ? { ...current, stats } : current));
+        socket.on("redis", (redis) => setStatus((current) => current ? { ...current, redis } : current));
+        socket.on("ORDER_ACCEPTED", (order) => {
+          void notifyOrder(order);
+        });
+        if ("Notification" in window && Notification.permission === "default") {
+          await Notification.requestPermission();
+        }
       }
     } catch (error) {
       setConnectionState("error");
       if (!quiet) setNotice(error.message);
     }
-  }, [adminToken, apiFetch, notificationSettings, notifyOrder, serverUrl]);
+  }, [adminToken, apiFetch, ensureNativeListeners, notificationSettings, notifyOrder, serverUrl]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -164,7 +189,14 @@ function App() {
     setAutoConnectReady(false);
     void connect({ quiet: true });
   }, [autoConnectReady, connect]);
-  React.useEffect(() => () => socketRef.current?.disconnect(), []);
+  React.useEffect(() => () => {
+    socketRef.current?.disconnect();
+    const nativeListeners = nativeListenersRef.current;
+    nativeListenersRef.current = null;
+    if (nativeListeners) {
+      void nativeListeners.then((handles) => Promise.all(handles.map((handle) => handle.remove()))).catch(() => {});
+    }
+  }, []);
   React.useEffect(() => {
     storage.set("notificationSettings", JSON.stringify(notificationSettings));
     if (isNative) void OrderService.updateSettings({ settings: notificationSettings }).catch(() => {});
@@ -198,10 +230,9 @@ function App() {
       const body = {
         origin: routeDraft.origin,
         destination: routeDraft.destination,
-        originAliases: routeDraft.originAliases.split(/[,;\n]+/).map((item) => item.trim()).filter(Boolean),
-        destinationAliases: routeDraft.destinationAliases.split(/[,;\n]+/).map((item) => item.trim()).filter(Boolean),
+        prices: routeDraft.prices.split(/[,;\n]+/).map((item) => item.trim()).filter(Boolean),
+        excludedKeywords: routeDraft.excludedKeywords.split(/[,;\n]+/).map((item) => item.trim()).filter(Boolean),
         enabled: routeDraft.enabled,
-        twoWay: routeDraft.twoWay,
       };
       const endpoint = routeDraft.id
         ? `/api/settings/priority-routes/${routeDraft.id}`
@@ -315,24 +346,10 @@ function App() {
     }
   }
 
-  async function toggleOverlay() {
-    if (!isNative) return setNotice("Nút nổi chỉ hoạt động trong ứng dụng Android");
-    const enabled = !overlayEnabled;
-    try {
-      await OrderService.setOverlay({ enabled });
-      setOverlayEnabled(enabled);
-    } catch (error) {
-      setNotice(error.message || "Chưa cấp quyền hiển thị trên ứng dụng khác");
-    }
-  }
-
-  const successfulOrders = orders.filter((order) => order.status === "success");
-  const today = new Date().toDateString();
-  const todayCount = successfulOrders.filter((order) => new Date(order.sentAt).toDateString() === today).length;
   const routes = status?.priorityRoutes || [];
   const query = routeSearch.trim().toLocaleLowerCase("vi");
   const visibleRoutes = routes.filter((route) => {
-    const matchesSearch = !query || `${route.origin} ${route.destination} ${route.originAliases.join(" ")} ${route.destinationAliases.join(" ")}`.toLocaleLowerCase("vi").includes(query);
+    const matchesSearch = !query || `${route.origin} ${route.destination} ${(route.prices || []).join(" ")} ${(route.excludedKeywords || []).join(" ")}`.toLocaleLowerCase("vi").includes(query);
     const matchesFilter = routeFilter === "all" || (routeFilter === "enabled" ? route.enabled : !route.enabled);
     return matchesSearch && matchesFilter;
   });
@@ -352,18 +369,16 @@ function App() {
 
       <nav className="nav-tabs" aria-label="Điều hướng">
         <button className={page === "dashboard" ? "active" : ""} onClick={() => setPage("dashboard")}>Tổng quan</button>
-        <button className={page === "history" ? "active" : ""} onClick={() => setPage("history")}>Lịch sử</button>
         <button className={page === "routes" ? "active" : ""} onClick={() => setPage("routes")}>Cuốc ưu tiên</button>
         <button className={page === "settings" ? "active" : ""} onClick={() => setPage("settings")}>Cài đặt</button>
       </nav>
 
-      {page === "dashboard" && <Dashboard {...{ status, todayCount, successfulOrders, busy, control }} />}
-      {page === "history" && <History orders={orders} />}
+      {page === "dashboard" && <Dashboard {...{ status, busy, control }} />}
       {page === "routes" && (
         <RoutesPage
           {...{ routes, visibleRoutes, routeSearch, setRouteSearch, routeFilter, setRouteFilter, savingRouteId }}
           onAdd={() => setRouteDraft(emptyRoute())}
-          onEdit={(route) => setRouteDraft({ ...route, originAliases: route.originAliases.join(", "), destinationAliases: route.destinationAliases.join(", ") })}
+          onEdit={(route) => setRouteDraft({ ...route, prices: (route.prices || []).join(", "), excludedKeywords: (route.excludedKeywords || []).join(", ") })}
           onUpdate={updateRoute}
           onDelete={deleteRoute}
           onToggleAll={toggleAll}
@@ -379,7 +394,7 @@ function App() {
             {[["sound", "Âm thanh"], ["vibrate", "Rung"], ["speech", "Giọng đọc tiếng Việt"]].map(([key, label]) => (
               <label className="switch-row" key={key}><span>{label}</span><input type="checkbox" checked={notificationSettings[key]} onChange={(event) => setNotificationSettings((value) => ({ ...value, [key]: event.target.checked }))} /></label>
             ))}
-            <label className="switch-row"><span>Nút điều khiển nổi</span><input type="checkbox" checked={overlayEnabled} onChange={() => void toggleOverlay()} /></label>
+            {isNative && <button className="secondary" onClick={() => void OrderService.openAppSettings()}>Mở cài đặt pin ứng dụng</button>}
           </section>
         </>
       )}
@@ -416,8 +431,8 @@ function ConnectScreen({ serverUrl, setServerUrl, adminToken, setAdminToken, con
   );
 }
 
-function Dashboard({ status, todayCount, successfulOrders, busy, control }) {
-  const latest = successfulOrders[0];
+function Dashboard({ status, busy, control }) {
+  const stats = status.stats || {};
   const routeStats = status.priorityRouteStats || { enabled: 0, disabled: 0 };
   const redis = status.redis || {};
   const redisReady = redis.connected && redis.subscriberConnected !== false;
@@ -428,34 +443,30 @@ function Dashboard({ status, todayCount, successfulOrders, busy, control }) {
     <section className={`hero-status ${status.enabled ? "running" : "stopped"}`}><span className="eyebrow">TRẠNG THÁI BOT</span><h2>{modeText(status)}</h2><p>{status.mode === "priority" ? "Chỉ phản hồi cuốc khớp tuyến ưu tiên đang bật" : "Phản hồi tất cả tin hợp lệ trong nhóm đã chọn"}</p></section>
     <section className="mode-picker panel"><h3>Chọn chế độ</h3><button className={status.mode === "all" ? "selected" : ""} disabled={busy} onClick={() => void control(status.enabled ? "start" : "stop", "all")}><strong>Nhận tất cả</strong><span>Mọi cuốc xe hợp lệ</span></button><button className={status.mode === "priority" ? "selected" : ""} disabled={busy} onClick={() => void control(status.enabled ? "start" : "stop", "priority")}><strong>Cuốc ưu tiên</strong><span>Chỉ tuyến đang bật</span></button></section>
     <section className="action-grid"><button className="start large" disabled={busy || status.enabled} onClick={() => void control("start")}>START<br /><small>Bắt đầu nhận đơn</small></button><button className="stop large" disabled={busy || !status.enabled} onClick={() => void control("stop")}>STOP<br /><small>Dừng ngay lập tức</small></button></section>
-    <section className="metrics"><article><strong>{todayCount}</strong><span>Đơn hôm nay</span></article><article><strong>{latest?.totalMs ?? latest?.latencyMs ?? "--"}</strong><span>Tốc độ gần nhất (ms)</span></article><article><strong>{routeStats.enabled}</strong><span>Tuyến đang bật</span></article><article><strong>{routeStats.disabled}</strong><span>Tuyến đang tắt</span></article></section>
+    <section className="metrics"><article><strong>{stats.sent ?? 0}</strong><span>Đã gửi phiên này</span></article><article><strong>{stats.lastLatencyMs ?? "--"}</strong><span>Tốc độ gần nhất (ms)</span></article><article><strong>{routeStats.enabled}</strong><span>Tuyến đang bật</span></article><article><strong>{routeStats.disabled}</strong><span>Tuyến đang tắt</span></article></section>
     <section className={`system-health panel ${redisReady ? "healthy" : "warning"}`}><div><strong>Redis: {redisLabel}</strong><span>{redis.connected ? `Phiên bản ${redis.version}` : "Bot đang dùng cấu hình gần nhất trong RAM"}</span></div><div><strong>Cập nhật cấu hình</strong><span>{formatTime(status.configUpdatedAt || redis.lastSyncedAt)}</span></div></section>
   </>;
-}
-
-function History({ orders }) {
-  return <section><div className="section-heading"><div><span className="eyebrow">ĐỒNG BỘ TỪ MÁY CHỦ</span><h2>Lịch sử đơn đã gửi thành công</h2></div><span>{orders.length} bản ghi</span></div><div className="order-list">{orders.length === 0 ? <p>Chưa có đơn nào.</p> : orders.map((order) => <article className="order-card success" key={order.eventId}><div><strong>Đã nhận đơn</strong><span>{formatTime(order.sentAt)}</span></div><p>{order.originalContent}</p><small>{order.groupName} · {order.senderName} · {order.mode === "priority" ? order.matchedRoute : "Nhận tất cả"}</small><small>Chuẩn hóa {order.normalizationMs ?? 0} ms · So tuyến {order.routeMatchMs ?? 0} ms · Gọi gửi {order.dispatchMs ?? "--"} ms · Zalo {order.networkMs ?? "--"} ms · Tổng {order.totalMs ?? order.latencyMs ?? "--"} ms</small></article>)}</div></section>;
 }
 
 function RoutesPage({ routes, visibleRoutes, routeSearch, setRouteSearch, routeFilter, setRouteFilter, savingRouteId, onAdd, onEdit, onUpdate, onDelete, onToggleAll, onFile, onBackup }) {
   const allEnabled = routes.length > 0 && routes.every((route) => route.enabled);
   return <section>
     <div className="section-heading"><div><span className="eyebrow">CÀI ĐẶT</span><h2>Cuốc xe ưu tiên</h2></div><button className="primary" onClick={onAdd}>+ Thêm tuyến mới</button></div>
-    <div className="route-toolbar panel"><input type="search" placeholder="Tìm điểm đi, điểm đến hoặc tên thay thế" value={routeSearch} onChange={(event) => setRouteSearch(event.target.value)} /><select value={routeFilter} onChange={(event) => setRouteFilter(event.target.value)}><option value="all">Tất cả tuyến</option><option value="enabled">Đang bật</option><option value="disabled">Đang tắt</option></select><label className="file-button">Tải file TXT<input type="file" accept=".txt,text/plain" disabled={savingRouteId === "all"} onChange={(event) => { void onFile(event.target.files?.[0]); event.target.value = ""; }} /></label><button className="secondary" onClick={() => void onBackup()}>Tải xuống bản sao</button></div>
+    <div className="route-toolbar panel"><input type="search" placeholder="Tìm điểm đi, điểm đến, giá tiền hoặc từ khóa" value={routeSearch} onChange={(event) => setRouteSearch(event.target.value)} /><select value={routeFilter} onChange={(event) => setRouteFilter(event.target.value)}><option value="all">Tất cả tuyến</option><option value="enabled">Đang bật</option><option value="disabled">Đang tắt</option></select><label className="file-button">Tải file TXT<input type="file" accept=".txt,text/plain" disabled={savingRouteId === "all"} onChange={(event) => { void onFile(event.target.files?.[0]); event.target.value = ""; }} /></label><button className="secondary" onClick={() => void onBackup()}>Tải xuống bản sao</button></div>
     <label className="bulk-switch panel"><span><strong>Bật/tắt tất cả tuyến</strong><small>{routes.length} tuyến trong cấu hình</small></span><input type="checkbox" checked={allEnabled} disabled={!routes.length || savingRouteId === "all"} onChange={(event) => void onToggleAll(event.target.checked)} /></label>
-    <div className="route-list">{visibleRoutes.length === 0 ? <p className="empty">Không có tuyến phù hợp.</p> : visibleRoutes.map((route) => <article className={`route-card ${route.enabled ? "enabled" : "disabled"}`} key={route.id}><div className="route-title"><strong>{route.origin} <span>→</span> {route.destination}</strong><small>{route.twoWay ? "Nhận hai chiều" : "Chỉ nhận một chiều"} · Cập nhật {formatTime(route.updatedAt)}</small>{(route.originAliases.length > 0 || route.destinationAliases.length > 0) && <small>Tên thay thế: {[...route.originAliases, ...route.destinationAliases].join(", ")}</small>}{route.sourceFile && <small>Nguồn: {route.sourceFile} · tải lên {formatTime(route.uploadedAt)} · {route.importRouteCount} tuyến hợp lệ</small>}</div><div className="route-actions"><label><span>Hai chiều</span><input type="checkbox" checked={route.twoWay} disabled={savingRouteId === route.id} onChange={(event) => void onUpdate(route, { twoWay: event.target.checked })} /></label><label><span>{route.enabled ? "Đang bật" : "Đang tắt"}</span><input type="checkbox" checked={route.enabled} disabled={savingRouteId === route.id} onChange={(event) => void onUpdate(route, { enabled: event.target.checked })} /></label><button className="secondary compact" onClick={() => onEdit(route)}>Sửa</button><button className="danger compact" onClick={() => void onDelete(route)}>Xóa</button></div>{savingRouteId === route.id && <span className="saving">Đang lưu trên máy chủ…</span>}</article>)}</div>
+    <div className="route-list">{visibleRoutes.length === 0 ? <p className="empty">Không có tuyến phù hợp.</p> : visibleRoutes.map((route) => <article className={`route-card ${route.enabled ? "enabled" : "disabled"}`} key={route.id}><div className="route-title"><strong>{route.origin} <span>→</span> {route.destination}</strong><small>Chỉ nhận đúng chiều · Cập nhật {formatTime(route.updatedAt)}</small>{(route.prices || []).length > 0 && <small>Giá nhận: {route.prices.join(", ")}</small>}{(route.excludedKeywords || []).length > 0 && <small>Từ khóa bị loại: {route.excludedKeywords.join(", ")}</small>}{route.sourceFile && <small>Nguồn: {route.sourceFile} · tải lên {formatTime(route.uploadedAt)} · {route.importRouteCount} tuyến hợp lệ</small>}</div><div className="route-actions"><label><span>{route.enabled ? "Đang bật" : "Đang tắt"}</span><input type="checkbox" checked={route.enabled} disabled={savingRouteId === route.id} onChange={(event) => void onUpdate(route, { enabled: event.target.checked })} /></label><button className="secondary compact" onClick={() => onEdit(route)}>Sửa</button><button className="danger compact" onClick={() => void onDelete(route)}>Xóa</button></div>{savingRouteId === route.id && <span className="saving">Đang lưu trên máy chủ…</span>}</article>)}</div>
   </section>;
 }
 
 function RouteDialog({ draft, setDraft, busy, onSave, onClose }) {
   const field = (key) => (event) => setDraft((value) => ({ ...value, [key]: event.target.value }));
-  return <div className="modal-backdrop"><section className="modal"><div className="section-heading"><h2>{draft.id ? "Chỉnh sửa tuyến" : "Thêm tuyến mới"}</h2><button className="icon-button" onClick={onClose}>×</button></div><label>Điểm đi</label><input value={draft.origin} onChange={field("origin")} placeholder="Ví dụ: Bắc Ninh" /><label>Điểm đến</label><input value={draft.destination} onChange={field("destination")} placeholder="Ví dụ: Hà Nội" /><label>Tên thay thế của điểm đi</label><textarea value={draft.originAliases} onChange={field("originAliases")} placeholder="BN, TP Bắc Ninh" /><label>Tên thay thế của điểm đến</label><textarea value={draft.destinationAliases} onChange={field("destinationAliases")} placeholder="HN, thành phố Hà Nội" /><label className="switch-row"><span>Nhận hai chiều</span><input type="checkbox" checked={draft.twoWay} onChange={(event) => setDraft((value) => ({ ...value, twoWay: event.target.checked }))} /></label><label className="switch-row"><span>Bật tuyến ngay</span><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((value) => ({ ...value, enabled: event.target.checked }))} /></label><div className="form-actions"><button className="secondary" onClick={onClose}>Hủy</button><button className="primary" disabled={busy || !draft.origin.trim() || !draft.destination.trim()} onClick={() => void onSave()}>{busy ? "Đang lưu…" : "Lưu trên máy chủ"}</button></div></section></div>;
+  return <div className="modal-backdrop"><section className="modal"><div className="section-heading"><h2>{draft.id ? "Chỉnh sửa tuyến" : "Thêm tuyến mới"}</h2><button className="icon-button" onClick={onClose}>×</button></div><label>Điểm đi</label><input required value={draft.origin} onChange={field("origin")} placeholder="Ví dụ: Bắc Ninh" /><label>Điểm đến</label><input required value={draft.destination} onChange={field("destination")} placeholder="Ví dụ: Hà Nội" /><label>Giá tiền (không bắt buộc)</label><textarea value={draft.prices} onChange={field("prices")} placeholder="Ví dụ: 200k; có thể nhập nhiều giá, ngăn cách bằng dấu phẩy" /><label>Từ khóa bị loại (không bắt buộc)</label><textarea value={draft.excludedKeywords} onChange={field("excludedKeywords")} placeholder="Ví dụ: chó, mèo" /><label className="switch-row"><span>Bật tuyến ngay</span><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((value) => ({ ...value, enabled: event.target.checked }))} /></label><div className="form-actions"><button className="secondary" onClick={onClose}>Hủy</button><button className="primary" disabled={busy || !draft.origin.trim() || !draft.destination.trim()} onClick={() => void onSave()}>{busy ? "Đang lưu…" : "Lưu trên máy chủ"}</button></div></section></div>;
 }
 
 function ImportDialog({ data, busy, onConfirm, onClose }) {
   const { preview } = data;
   const hasErrors = preview.errors.length > 0;
-  return <div className="modal-backdrop"><section className="modal wide"><div className="section-heading"><div><span className="eyebrow">XEM TRƯỚC FILE TXT</span><h2>{data.fileName}</h2></div><button className="icon-button" onClick={onClose}>×</button></div><div className="preview-summary"><strong>{preview.routes.length} tuyến mới</strong><span>{preview.duplicates.length} tuyến trùng</span><span className={hasErrors ? "error-text" : ""}>{preview.errors.length} dòng lỗi</span></div>{hasErrors && <div className="error-list">{preview.errors.map((error) => <p key={`${error.line}-${error.reason}`}><strong>Dòng {error.line}:</strong> {error.reason} <code>{error.content}</code></p>)}</div>}<div className="preview-list">{preview.routes.map((route) => <p key={route.id}>{route.origin} <strong>↔</strong> {route.destination}</p>)}</div>{preview.duplicates.length > 0 && <details><summary>Tuyến trùng đã bỏ qua</summary>{preview.duplicates.map((item) => <p key={`${item.line}-${item.content}`}>Dòng {item.line}: {item.content}</p>)}</details>}<div className="form-actions"><button className="secondary" onClick={onClose}>Hủy</button><button className="primary" disabled={busy || hasErrors || preview.routes.length === 0} onClick={() => void onConfirm()}>{busy ? "Đang nhập…" : "Xác nhận nhập"}</button></div></section></div>;
+  return <div className="modal-backdrop"><section className="modal wide"><div className="section-heading"><div><span className="eyebrow">XEM TRƯỚC FILE TXT</span><h2>{data.fileName}</h2></div><button className="icon-button" onClick={onClose}>×</button></div><div className="preview-summary"><strong>{preview.routes.length} tuyến mới</strong><span>{preview.duplicates.length} tuyến trùng</span><span className={hasErrors ? "error-text" : ""}>{preview.errors.length} dòng lỗi</span></div>{hasErrors && <div className="error-list">{preview.errors.map((error) => <p key={`${error.line}-${error.reason}`}><strong>Dòng {error.line}:</strong> {error.reason} <code>{error.content}</code></p>)}</div>}<div className="preview-list">{preview.routes.map((route) => <p key={route.id}>{route.origin} <strong>→</strong> {route.destination}</p>)}</div>{preview.duplicates.length > 0 && <details><summary>Tuyến trùng đã bỏ qua</summary>{preview.duplicates.map((item) => <p key={`${item.line}-${item.content}`}>Dòng {item.line}: {item.content}</p>)}</details>}<div className="form-actions"><button className="secondary" onClick={onClose}>Hủy</button><button className="primary" disabled={busy || hasErrors || preview.routes.length === 0} onClick={() => void onConfirm()}>{busy ? "Đang nhập…" : "Xác nhận nhập"}</button></div></section></div>;
 }
 
 function ZaloLogin({ status, apiUrl, token, revision }) {

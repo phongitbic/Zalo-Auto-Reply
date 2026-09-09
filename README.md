@@ -6,9 +6,9 @@ Hệ thống nhận tin nhắn nhóm bằng Socket của Zalo và gửi `@Tên n
 
 ## Thành phần
 
-- `server/`: Bun 1.4 + Elysia, Socket.IO chạy trên Bun Engine, QR đăng nhập, trạng thái bot và lịch sử đơn trên máy chủ.
+- `server/`: Bun 1.4 + Elysia, Socket.IO chạy trên Bun Engine, QR đăng nhập và trạng thái bot trên máy chủ.
 - `client/`: React/Vite, giao diện web và bundle dùng trong Capacitor.
-- `android/`: ứng dụng Android native, foreground service, thông báo, TTS và nút nổi.
+- `android/`: ứng dụng Android native, foreground service, thông báo và TTS.
 
 Entry production duy nhất là `server/src/index.js`, chạy bằng Bun và Elysia. Không chạy hai instance vì sẽ tạo hai listener cho cùng tài khoản Zalo.
 
@@ -51,7 +51,6 @@ Các biến quan trọng nằm trong [server/.env.example](server/.env.example):
 - `CLIENT_ORIGINS`: origin web/Capacitor được phép kết nối.
 - `SESSION_FILE` và `QR_FILE`: session cùng QR đăng nhập được bảo vệ trên VPS.
 - `BOT_STATE_FILE`: lưu START/STOP và chế độ hiện tại.
-- `ORDER_HISTORY_FILE`: lịch sử các đơn Zalo đã xác nhận gửi thành công để đồng bộ lại app.
 - `MAX_SOCKET_CONNECTIONS`: giới hạn client đồng thời cho một instance.
 - `KEEP_ALIVE_INTERVAL_MS`: heartbeat Zalo, mặc định và tối thiểu 5 giây.
 - `GROUP_PRECONNECT_INTERVAL_MS`: chuẩn bị sẵn DNS/TCP/TLS tới đúng host gửi nhóm, mặc định 1 giây. Backend cũng preconnect ngay trước mỗi lần gửi; không tạo request API Zalo giả.
@@ -118,7 +117,7 @@ Bắc Ninh | Quảng Ninh
 Võ Cường, Bắc Ninh | Cầu Giấy, Hà Nội
 ```
 
-Giao diện luôn hiển thị bản xem trước và số dòng lỗi trước khi xác nhận. File có một dòng sai sẽ không thay đổi cấu hình đang chạy. Tuyến nhập mới mặc định bật và nhận hai chiều; có thể sửa điểm đi, điểm đến, trạng thái, chiều đi và tên thay thế riêng trên giao diện. Các chữ viết tắt như `BN`, `HN` chỉ được dùng khi người quản trị khai báo, bot không tự suy diễn.
+Giao diện luôn hiển thị bản xem trước và số dòng lỗi trước khi xác nhận. File có một dòng sai sẽ không thay đổi cấu hình đang chạy. Mỗi tuyến chỉ nhận đúng chiều từ điểm đi tới điểm đến; muốn nhận chiều ngược phải tạo một tuyến riêng. Điểm đi và điểm đến là bắt buộc. Giá tiền và từ khóa bị loại là hai bộ lọc không bắt buộc: nếu khai báo giá, tin nhắn phải chứa ít nhất một giá đã nhập; nếu chứa bất kỳ từ khóa bị loại nào thì bot không trả lời. Có thể nhập nhiều giá hoặc từ khóa, ngăn cách bằng dấu phẩy, dấu chấm phẩy hoặc xuống dòng.
 
 Bộ lọc chuẩn hóa chữ hoa/thường, dấu tiếng Việt, dấu câu và khoảng trắng một lần trong RAM. File TXT chỉ dùng lúc nhập; không có thao tác đọc file hoặc tải toàn bộ Redis trên đường xử lý từng tin nhắn.
 
@@ -212,8 +211,7 @@ Tất cả API `/api/*` yêu cầu `Authorization: Bearer <ADMIN_KEY>` hoặc `x
 | --- | --- | --- |
 | GET | `/health` | Health check 200 |
 | GET | `/api/status` | Snapshot bot, mode, tuyến, Redis và timings |
-| GET | `/api/bootstrap` | `{ status, orders }` để web/APK đồng bộ ban đầu |
-| GET | `/api/orders?limit=100` | Lịch sử gửi thành công, giới hạn 1–500 |
+| GET | `/api/bootstrap` | `{ status }` để web/APK đồng bộ trạng thái ban đầu |
 | GET | `/api/zalo/qr` | Ảnh QR không cache hoặc JSON 404 |
 | POST | `/api/bot/control` | `{ action: "start"|"stop", mode: "all"|"priority" }` |
 | POST | `/api/bot/enabled` | Tương thích client cũ với `{ enabled }` |
@@ -226,7 +224,7 @@ Tất cả API `/api/*` yêu cầu `Authorization: Bearer <ADMIN_KEY>` hoặc `x
 | DELETE | `/api/settings/priority-routes/:id` | Xóa một tuyến |
 | GET | `/api/settings/priority-routes/export` | Tải JSON tuyến dưới dạng attachment |
 
-Dashboard và APK tiếp tục kết nối Socket.IO tại `/socket.io/`, chỉ dùng transport `websocket`, token nằm trong `auth.token` hoặc header `x-admin-key`. Bun Engine chính chủ của Socket.IO được gắn trực tiếp vào Elysia nên client không cần đổi giao thức. Khi kết nối, server gửi `status` và `orders`; trong lúc chạy phát `status`, `stats`, `redis`, `qr`, `ORDER_ACCEPTED` và `ORDER_FAILED`. Sự kiện nội bộ `decision` chỉ dùng cho log khi bật `HOT_PATH_LOGGING`.
+Dashboard và APK tiếp tục kết nối Socket.IO tại `/socket.io/`, chỉ dùng transport `websocket`, token nằm trong `auth.token` hoặc header `x-admin-key`. Bun Engine chính chủ của Socket.IO được gắn trực tiếp vào Elysia nên client không cần đổi giao thức. Khi kết nối, server gửi `status`; trong lúc chạy phát `status`, `stats`, `redis`, `qr`, `ORDER_ACCEPTED` và `ORDER_FAILED`. Sự kiện nội bộ `decision` chỉ dùng cho log khi bật `HOT_PATH_LOGGING`.
 
 Nhóm Zalo hiện được quản lý duy nhất bởi `ALLOWED_GROUP_IDS` trong `.env`; migration không tự thêm API nhóm mới để tránh đổi hành vi production.
 

@@ -27,11 +27,6 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
         const val ACTION_CONNECT = "vn.zalo.autoreply.CONNECT"
         const val ACTION_START = "vn.zalo.autoreply.START"
         const val ACTION_STOP = "vn.zalo.autoreply.STOP"
-        const val ACTION_EXIT = "vn.zalo.autoreply.EXIT"
-        const val ACTION_SHOW_OVERLAY = "vn.zalo.autoreply.SHOW_OVERLAY"
-        const val ACTION_HIDE_OVERLAY = "vn.zalo.autoreply.HIDE_OVERLAY"
-        const val ACTION_ORDER = "vn.zalo.autoreply.ORDER"
-        const val EXTRA_ORDER = "order"
         private const val FOREGROUND_CHANNEL = "bot_service"
         private const val FOREGROUND_ID = 4101
     }
@@ -41,10 +36,11 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
     private lateinit var secretStore: SecretStore
     private lateinit var connectivity: ConnectivityManager
     private var socket: Socket? = null
-    private var overlay: OverlayController? = null
     private var textToSpeech: TextToSpeech? = null
     private var ttsReady = false
     private var lastBotStatus: JSONObject? = null
+    private var activeServerUrl: String? = null
+    private var activeToken: String? = null
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -53,7 +49,7 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
 
         override fun onLost(network: Network) {
             updateForeground("Mất mạng, đang chờ kết nối lại")
-            overlay?.updateStatus("Mất kết nối máy chủ", false)
+            publishConnection("disconnected")
         }
     }
 
@@ -73,19 +69,9 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
+            ACTION_CONNECT -> reconnectSocket()
             ACTION_START -> sendControl("start")
             ACTION_STOP -> sendControl("stop")
-            ACTION_EXIT -> stopSelf()
-            ACTION_SHOW_OVERLAY -> showOverlay()
-            ACTION_HIDE_OVERLAY -> hideOverlay()
-            ACTION_ORDER -> intent.getStringExtra(EXTRA_ORDER)?.let {
-                handleOrder(
-                    JSONObject(it),
-                    intent.getBooleanExtra("sound", true),
-                    intent.getBooleanExtra("vibrate", true),
-                    intent.getBooleanExtra("speech", false)
-                )
-            }
             else -> reconnectSocket()
         }
         return START_STICKY
@@ -94,10 +80,11 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        hideOverlay()
         socket?.off()
         socket?.disconnect()
         socket = null
+        activeServerUrl = null
+        activeToken = null
         try {
             connectivity.unregisterNetworkCallback(networkCallback)
         } catch (_: Exception) {
@@ -119,46 +106,65 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
         val token = secretStore.getToken()
         if (serverUrl.isNullOrBlank() || token.isNullOrBlank()) {
             updateForeground("Chưa cấu hình địa chỉ máy chủ")
+            publishConnection("error", "Chưa cấu hình địa chỉ máy chủ")
+            return
+        }
+
+        if (serverUrl == activeServerUrl && token == activeToken && socket?.connected() == true) {
+            publishConnection("connected")
+            lastBotStatus?.let { OrderServicePlugin.publish("serverStatus", it) }
             return
         }
 
         socket?.off()
         socket?.disconnect()
+        activeServerUrl = serverUrl
+        activeToken = token
         val options = IO.Options().apply {
-            auth = mapOf("token" to token)
+            auth = mapOf("token" to token, "clientType" to "android-service")
             reconnection = true
             reconnectionDelay = 1000L
-            reconnectionDelayMax = 30000L
+            reconnectionDelayMax = 5000L
             timeout = 10000L
             transports = arrayOf("websocket")
         }
         socket = IO.socket(URI.create(serverUrl), options).apply {
             on(Socket.EVENT_CONNECT) {
                 updateForeground("Bot nhận đơn đang hoạt động")
-                overlay?.updateStatus("Đã kết nối máy chủ", true)
+                publishConnection("connected")
             }
             on(Socket.EVENT_DISCONNECT) {
                 updateForeground("Đang kết nối lại máy chủ")
-                overlay?.updateStatus("Mất kết nối máy chủ", false)
+                publishConnection("disconnected")
             }
-            on(Socket.EVENT_CONNECT_ERROR) {
+            on(Socket.EVENT_CONNECT_ERROR) { args ->
                 updateForeground("Không thể kết nối máy chủ")
-                overlay?.updateStatus("Mất kết nối máy chủ", false)
+                publishConnection("error", args.firstOrNull()?.toString())
             }
             on("status") { args ->
                 val status = args.firstOrNull() as? JSONObject
                 if (status != null) {
                     lastBotStatus = status
                     renderBotStatus(status)
+                    OrderServicePlugin.publish("serverStatus", status)
                 }
+            }
+            on("stats") { args ->
+                (args.firstOrNull() as? JSONObject)?.let { OrderServicePlugin.publish("serverStats", it) }
             }
             on("redis") { args ->
                 val redis = args.firstOrNull() as? JSONObject
                 val status = lastBotStatus
-                if (redis != null && status != null) {
-                    status.put("redis", redis)
-                    renderBotStatus(status)
+                if (redis != null) {
+                    if (status != null) {
+                        status.put("redis", redis)
+                        renderBotStatus(status)
+                    }
+                    OrderServicePlugin.publish("serverRedis", redis)
                 }
+            }
+            on("qr") { args ->
+                (args.firstOrNull() as? JSONObject)?.let { OrderServicePlugin.publish("zaloQr", it) }
             }
             on("ORDER_ACCEPTED") { args ->
                 val order = args.firstOrNull() as? JSONObject
@@ -175,6 +181,12 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
+    private fun publishConnection(state: String, message: String? = null) {
+        val payload = JSONObject().put("state", state)
+        if (!message.isNullOrBlank()) payload.put("message", message)
+        OrderServicePlugin.publish("connectionState", payload)
+    }
+
     private fun renderBotStatus(status: JSONObject) {
         val enabled = status.optBoolean("enabled")
         val mode = status.optString("mode", "all")
@@ -183,7 +195,6 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
         val redisConnected = redis?.optBoolean("connected") == true
         val subscriberConnected = redis?.optBoolean("subscriberConnected", true) != false
         preferences.edit().putString("mode", mode).apply()
-        overlay?.updateBotState(status)
         val modeLabel = if (!enabled) "Đã dừng nhận đơn"
             else if (mode == "priority") "Đang nhận cuốc ưu tiên"
             else "Đang nhận tất cả"
@@ -227,20 +238,6 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
                 updateForeground("Mất kết nối máy chủ")
             }
         }
-    }
-
-    private fun showOverlay() {
-        if (!android.provider.Settings.canDrawOverlays(this)) return
-        if (overlay == null) {
-            overlay = OverlayController(this, ::sendControl) { stopSelf() }
-        }
-        overlay?.show()
-        lastBotStatus?.let { overlay?.updateBotState(it) }
-    }
-
-    private fun hideOverlay() {
-        overlay?.hide()
-        overlay = null
     }
 
     private fun createForegroundChannel() {

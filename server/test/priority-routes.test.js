@@ -13,9 +13,8 @@ const route = (overrides = {}) => createPriorityRoute({
   origin: overrides.origin ?? "Bắc Ninh",
   destination: overrides.destination ?? "Hà Nội",
   enabled: overrides.enabled ?? true,
-  twoWay: overrides.twoWay ?? true,
-  originAliases: overrides.originAliases ?? [],
-  destinationAliases: overrides.destinationAliases ?? [],
+  prices: overrides.prices ?? [],
+  excludedKeywords: overrides.excludedKeywords ?? [],
 });
 
 const match = (message, routes) => matchPriorityRoute(
@@ -27,7 +26,7 @@ test("normalizes Vietnamese accents, punctuation, case and whitespace", () => {
   assert.equal(normalizeLocation("  TP. BẮC   NINH!!! "), "tp bac ninh");
 });
 
-test("parses TXT routes, ignores blank lines and enables two-way by default", () => {
+test("parses TXT routes as enabled one-way routes", () => {
   const result = parsePriorityRouteFile("Bắc Ninh | Hà Nội\n\nVõ Cường | Cầu Giấy", {
     fileName: "tuyen.txt",
     now: "2026-09-04T00:00:00.000Z",
@@ -35,8 +34,10 @@ test("parses TXT routes, ignores blank lines and enables two-way by default", ()
   });
   assert.equal(result.errors.length, 0);
   assert.equal(result.validRouteCount, 2);
-  assert.equal(result.routes[0].twoWay, true);
+  assert.equal("twoWay" in result.routes[0], false);
   assert.equal(result.routes[0].enabled, true);
+  assert.deepEqual(result.routes[0].prices, []);
+  assert.deepEqual(result.routes[0].excludedKeywords, []);
   assert.equal(result.routes[0].sourceFile, "tuyen.txt");
   assert.equal(result.routes[0].importRouteCount, 2);
 });
@@ -59,32 +60,66 @@ test("a malformed file leaves the live route array untouched", () => {
   assert.equal(nextRoutes[0].destination, "Hà Nội");
 });
 
-test("does not create duplicate routes with accents or reversed endpoints", () => {
-  const result = parsePriorityRouteFile("Bắc Ninh | Hà Nội\nha noi | bac ninh");
+test("does not create a duplicate route with accents", () => {
+  const result = parsePriorityRouteFile("Bắc Ninh | Hà Nội\nbac ninh | ha noi");
   assert.equal(result.routes.length, 1);
   assert.equal(result.duplicates[0].line, 2);
+});
+
+test("allows an explicitly configured reverse route", () => {
+  const result = parsePriorityRouteFile("Bắc Ninh | Hà Nội\nHà Nội | Bắc Ninh");
+  assert.equal(result.routes.length, 2);
+  assert.equal(result.duplicates.length, 0);
 });
 
 test("accepts an enabled forward priority route", () => {
   assert.equal(match("Có khách từ Bắc Ninh đi Hà Nội", [route()]).reason, "ACCEPTED_PRIORITY");
 });
 
-test("accepts the reverse direction for a two-way route", () => {
-  assert.equal(match("Hà Nội về Bắc Ninh", [route()]).reason, "ACCEPTED_PRIORITY");
-});
-
-test("rejects the reverse direction for a one-way route", () => {
-  assert.equal(match("Hà Nội về Bắc Ninh", [route({ twoWay: false })]).reason, "IGNORED_WRONG_DIRECTION");
+test("rejects the reverse direction even when legacy data enables two-way", () => {
+  const legacyRoute = createPriorityRoute({
+    id: "legacy-route",
+    origin: "Bắc Ninh",
+    destination: "Hà Nội",
+    twoWay: true,
+  });
+  assert.equal("twoWay" in legacyRoute, false);
+  assert.equal(match("Hà Nội về Bắc Ninh", [legacyRoute]).reason, "IGNORED_WRONG_DIRECTION");
 });
 
 test("rejects a disabled matching route", () => {
   assert.equal(match("Bắc Ninh đi Hà Nội", [route({ enabled: false })]).reason, "IGNORED_ROUTE_DISABLED");
 });
 
-test("uses only explicitly configured aliases", () => {
-  const configured = route({ originAliases: ["BN"], destinationAliases: ["HN"] });
-  assert.equal(match("BN đi HN", [configured]).reason, "ACCEPTED_PRIORITY");
-  assert.equal(match("BN đi HN", [route()]).reason, "IGNORED_INVALID_MESSAGE");
+test("accepts any price when optional filters are empty", () => {
+  assert.equal(match("Bắc Ninh đi Hà Nội 150k", [route()]).reason, "ACCEPTED_PRIORITY");
+});
+
+test("accepts only an explicitly configured price as a complete term", () => {
+  const configured = route({ prices: ["200k", "250k"] });
+  assert.equal(match("Bắc Ninh đi Hà Nội 200k", [configured]).reason, "ACCEPTED_PRIORITY");
+  assert.equal(match("Bắc Ninh đi Hà Nội 250K", [configured]).reason, "ACCEPTED_PRIORITY");
+  assert.equal(match("Bắc Ninh đi Hà Nội 150k", [configured]).reason, "IGNORED_PRICE_MISMATCH");
+  assert.equal(match("Bắc Ninh đi Hà Nội 1200k", [configured]).reason, "IGNORED_PRICE_MISMATCH");
+});
+
+test("rejects a route containing any configured excluded keyword", () => {
+  const configured = route({ prices: ["200k"], excludedKeywords: ["chó", "mèo"] });
+  assert.equal(match("Bắc Ninh Hà Nội 200k, chó mèo", [configured]).reason, "IGNORED_EXCLUDED_KEYWORD");
+  assert.equal(match("Bắc Ninh Hà Nội 200k, hành lý", [configured]).reason, "ACCEPTED_PRIORITY");
+});
+
+test("ignores legacy alias fields instead of treating them as new filters", () => {
+  const legacyRoute = createPriorityRoute({
+    id: "legacy-aliases",
+    origin: "Bắc Ninh",
+    destination: "Hà Nội",
+    originAliases: ["BN"],
+    destinationAliases: ["HN"],
+  });
+  assert.equal("originAliases" in legacyRoute, false);
+  assert.equal("destinationAliases" in legacyRoute, false);
+  assert.equal(match("BN đi HN", [legacyRoute]).reason, "IGNORED_INVALID_MESSAGE");
 });
 
 test("distinguishes an unknown pair from a message without a complete route", () => {

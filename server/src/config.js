@@ -27,15 +27,12 @@ const priorityRoutesFile = path.resolve(
   process.env.PRIORITY_ROUTES_FILE || "data/priority-routes.json"
 );
 const botStateFile = path.resolve(currentDir, "..", process.env.BOT_STATE_FILE || "data/bot-state.json");
-const orderHistoryFile = path.resolve(currentDir, "..", process.env.ORDER_HISTORY_FILE || "data/order-history.json");
 const defaultMode = process.env.PRIORITY_ONLY === "true" ? "priority" : "all";
 const botState = loadJsonFile(
   botStateFile,
   { enabled: true, mode: defaultMode },
   (value) => value && typeof value.enabled === "boolean" && ["all", "priority"].includes(value.mode)
 );
-const orderHistory = loadJsonFile(orderHistoryFile, [], Array.isArray);
-
 export const config = {
   port: Number(process.env.PORT || 3001),
   serverHost: process.env.SERVER_HOST || "0.0.0.0",
@@ -60,9 +57,6 @@ export const config = {
   groupPreconnectIntervalMs: Math.max(1000, Number(process.env.GROUP_PRECONNECT_INTERVAL_MS) || 1000),
   botState,
   botStateFile,
-  orderHistory,
-  orderHistoryFile,
-  maxOrderHistory: Math.max(20, Number(process.env.MAX_ORDER_HISTORY) || 500),
   maxSocketConnections: Math.max(1, Number(process.env.MAX_SOCKET_CONNECTIONS) || 5),
   redisUrl: process.env.REDIS_URL || "redis://127.0.0.1:6379",
   redisPrefix: process.env.REDIS_PREFIX || "zalo-auto-reply",

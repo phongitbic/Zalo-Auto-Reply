@@ -19,10 +19,6 @@ export const createApiRoutes = ({ config, runtime, tokenMatches }) =>
     })
     .get("/status", () => runtime.snapshot())
     .get("/bootstrap", () => runtime.bootstrap())
-    .get("/orders", ({ query }) => {
-      const limit = Math.min(500, Math.max(1, Number(query.limit) || 100));
-      return runtime.orders(limit);
-    })
     .get("/zalo/qr", async ({ set }) => {
       try {
         await fs.access(config.qrFile);

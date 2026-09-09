@@ -9,9 +9,33 @@ import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
+import org.json.JSONObject
+import java.lang.ref.WeakReference
 
 @CapacitorPlugin(name = "OrderService")
 class OrderServicePlugin : Plugin() {
+    companion object {
+        @Volatile
+        private var activePlugin: WeakReference<OrderServicePlugin>? = null
+
+        fun publish(eventName: String, payload: JSONObject) {
+            activePlugin?.get()?.publishToWebView(eventName, payload)
+        }
+    }
+
+    override fun load() {
+        activePlugin = WeakReference(this)
+    }
+
+    override fun handleOnDestroy() {
+        if (activePlugin?.get() === this) activePlugin = null
+        super.handleOnDestroy()
+    }
+
+    private fun publishToWebView(eventName: String, payload: JSONObject) {
+        runCatching { notifyListeners(eventName, JSObject.fromJSONObject(payload)) }
+    }
+
     private fun saveSettings(settings: JSObject) {
         context.getSharedPreferences(OrderForegroundService.PREFERENCES, 0).edit()
             .putBoolean("sound", settings.optBoolean("sound", true))
@@ -35,7 +59,7 @@ class OrderServicePlugin : Plugin() {
         val serverUrl = ServerUrlPolicy.normalize(call.getString("serverUrl"))
         val token = call.getString("token")
         if (serverUrl == null) {
-            call.reject("Địa chỉ máy chủ phải là HTTPS, hoặc HTTP dùng IP mạng nội bộ/Tailscale")
+            call.reject("Địa chỉ máy chủ phải bắt đầu bằng http:// hoặc https:// và không có đường dẫn")
             return
         }
         if (token.isNullOrBlank()) {
@@ -70,38 +94,14 @@ class OrderServicePlugin : Plugin() {
     }
 
     @PluginMethod
-    fun setOverlay(call: PluginCall) {
-        val enabled = call.getBoolean("enabled", false) ?: false
-        if (enabled && !Settings.canDrawOverlays(context)) {
-            context.startActivity(
-                Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:${context.packageName}")
-                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-            call.reject("Hãy cấp quyền hiển thị trên ứng dụng khác rồi bật lại")
-            return
-        }
-        val action = if (enabled) OrderForegroundService.ACTION_SHOW_OVERLAY else OrderForegroundService.ACTION_HIDE_OVERLAY
-        ContextCompat.startForegroundService(context, Intent(context, OrderForegroundService::class.java).setAction(action))
+    fun openAppSettings(call: PluginCall) {
+        context.startActivity(
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:${context.packageName}")
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
         call.resolve()
     }
 
-    @PluginMethod
-    fun handleOrder(call: PluginCall) {
-        val order = call.getObject("order")
-        if (order == null) {
-            call.reject("Thiếu dữ liệu đơn")
-            return
-        }
-        val settings = call.getObject("settings") ?: JSObject()
-        val intent = Intent(context, OrderForegroundService::class.java)
-            .setAction(OrderForegroundService.ACTION_ORDER)
-            .putExtra(OrderForegroundService.EXTRA_ORDER, order.toString())
-            .putExtra("sound", settings.optBoolean("sound", true))
-            .putExtra("vibrate", settings.optBoolean("vibrate", true))
-            .putExtra("speech", settings.optBoolean("speech", false))
-        ContextCompat.startForegroundService(context, intent)
-        call.resolve()
-    }
 }

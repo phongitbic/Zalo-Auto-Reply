@@ -14,8 +14,8 @@ export const normalizeLocation = (value) =>
 
 const cleanLabel = (value) => String(value ?? "").trim().replace(/\s+/g, " ");
 
-const cleanAliases = (values, primary) => {
-  const seen = new Set([normalizeLocation(primary)]);
+const cleanTerms = (values) => {
+  const seen = new Set();
   return (Array.isArray(values) ? values : String(values ?? "").split(/[,;\n]+/))
     .map(cleanLabel)
     .filter((value) => {
@@ -27,8 +27,7 @@ const cleanAliases = (values, primary) => {
 };
 
 export const priorityRouteKey = (route) => {
-  const endpoints = [normalizeLocation(route.origin), normalizeLocation(route.destination)].sort();
-  return endpoints.join("\u0000");
+  return `${normalizeLocation(route.origin)}\u0000${normalizeLocation(route.destination)}`;
 };
 
 const validateEndpoints = (origin, destination) => {
@@ -50,9 +49,8 @@ export const createPriorityRoute = ({
   origin,
   destination,
   enabled = true,
-  twoWay = true,
-  originAliases = [],
-  destinationAliases = [],
+  prices = [],
+  excludedKeywords = [],
   sourceFile = null,
   uploadedAt = null,
   importRouteCount = null,
@@ -72,9 +70,8 @@ export const createPriorityRoute = ({
     origin: cleanOrigin,
     destination: cleanDestination,
     enabled: Boolean(enabled),
-    twoWay: Boolean(twoWay),
-    originAliases: cleanAliases(originAliases, cleanOrigin),
-    destinationAliases: cleanAliases(destinationAliases, cleanDestination),
+    prices: cleanTerms(prices),
+    excludedKeywords: cleanTerms(excludedKeywords),
     sourceFile: sourceFile ? cleanLabel(sourceFile) : null,
     uploadedAt: uploadedAt || null,
     importRouteCount: Number.isInteger(importRouteCount) ? importRouteCount : null,
@@ -163,15 +160,14 @@ export const loadPriorityRoutes = (filePath) => {
   return sanitizePriorityRoutes(storedRoutes);
 };
 
-const compileTerms = (primary, aliases) =>
-  [...new Set([primary, ...aliases].map(normalizeLocation).filter(Boolean))];
-
 export const compilePriorityRoutes = (routes = []) => {
   const compiledRoutes = routes.map((route, index) => ({
     index,
     route,
-    originTerms: compileTerms(route.origin, route.originAliases),
-    destinationTerms: compileTerms(route.destination, route.destinationAliases),
+    originTerms: [normalizeLocation(route.origin)],
+    destinationTerms: [normalizeLocation(route.destination)],
+    priceTerms: (route.prices ?? []).map(normalizeLocation).filter(Boolean),
+    excludedTerms: (route.excludedKeywords ?? []).map(normalizeLocation).filter(Boolean),
   }));
   const locationTerms = new Set();
   const routeIndexesByTerm = new Map();
@@ -228,6 +224,12 @@ const termIndex = (occurrences, terms) => {
   return best;
 };
 
+const containsTerm = (normalizedMessage, term) =>
+  normalizedMessage === term ||
+  normalizedMessage.startsWith(`${term} `) ||
+  normalizedMessage.endsWith(` ${term}`) ||
+  normalizedMessage.includes(` ${term} `);
+
 export const matchPriorityRoute = (normalizedMessage, compiled) => {
   if (!normalizedMessage) return { accepted: false, reason: "IGNORED_INVALID_MESSAGE" };
   const occurrences = findTermOccurrences(normalizedMessage, compiled.termTrie);
@@ -239,6 +241,8 @@ export const matchPriorityRoute = (normalizedMessage, compiled) => {
   }
   let disabledMatch = null;
   let wrongDirectionMatch = null;
+  let excludedKeywordMatch = null;
+  let priceMismatch = null;
 
   for (const routeIndex of [...candidateIndexes].sort((left, right) => left - right)) {
     const item = compiled.routes[routeIndex];
@@ -247,7 +251,7 @@ export const matchPriorityRoute = (normalizedMessage, compiled) => {
     if (originIndex === -1 || destinationIndex === -1 || originIndex === destinationIndex) continue;
 
     const forward = originIndex < destinationIndex;
-    if (!forward && !item.route.twoWay) {
+    if (!forward) {
       wrongDirectionMatch ??= item.route;
       continue;
     }
@@ -255,11 +259,25 @@ export const matchPriorityRoute = (normalizedMessage, compiled) => {
       disabledMatch ??= item.route;
       continue;
     }
+    if (item.excludedTerms.some((term) => containsTerm(normalizedMessage, term))) {
+      excludedKeywordMatch ??= item.route;
+      continue;
+    }
+    if (item.priceTerms.length > 0 && !item.priceTerms.some((term) => containsTerm(normalizedMessage, term))) {
+      priceMismatch ??= item.route;
+      continue;
+    }
     return { accepted: true, reason: "ACCEPTED_PRIORITY", route: item.route };
   }
 
   if (disabledMatch) {
     return { accepted: false, reason: "IGNORED_ROUTE_DISABLED", route: disabledMatch };
+  }
+  if (excludedKeywordMatch) {
+    return { accepted: false, reason: "IGNORED_EXCLUDED_KEYWORD", route: excludedKeywordMatch };
+  }
+  if (priceMismatch) {
+    return { accepted: false, reason: "IGNORED_PRICE_MISMATCH", route: priceMismatch };
   }
   if (wrongDirectionMatch) {
     return { accepted: false, reason: "IGNORED_WRONG_DIRECTION", route: wrongDirectionMatch };
@@ -282,9 +300,8 @@ export const summarizePriorityRoutes = (routes = []) => routes.map((route) => ({
   origin: route.origin,
   destination: route.destination,
   enabled: route.enabled,
-  twoWay: route.twoWay,
-  originAliases: [...route.originAliases],
-  destinationAliases: [...route.destinationAliases],
+  prices: [...route.prices],
+  excludedKeywords: [...route.excludedKeywords],
   sourceFile: route.sourceFile,
   uploadedAt: route.uploadedAt,
   importRouteCount: route.importRouteCount,

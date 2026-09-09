@@ -464,9 +464,9 @@ test("retries when initial Zalo login fails", async () => {
 });
 
 const mandatoryRoutes = () => [
-  createPriorityRoute({ id: "bn-hn", origin: "Bắc Ninh", destination: "Hà Nội", enabled: true, twoWay: true }),
-  createPriorityRoute({ id: "bn-qn", origin: "Bắc Ninh", destination: "Quảng Ninh", enabled: false, twoWay: true }),
-  createPriorityRoute({ id: "vc-cg", origin: "Võ Cường", destination: "Cầu Giấy", enabled: true, twoWay: true }),
+  createPriorityRoute({ id: "bn-hn", origin: "Bắc Ninh", destination: "Hà Nội", enabled: true }),
+  createPriorityRoute({ id: "bn-qn", origin: "Bắc Ninh", destination: "Quảng Ninh", enabled: false }),
+  createPriorityRoute({ id: "vc-cg", origin: "Võ Cường", destination: "Cầu Giấy", enabled: true }),
 ];
 
 const flushPromises = () => new Promise((resolve) => setImmediate(resolve));
@@ -489,7 +489,7 @@ test("ALL mode bypasses priority route status and accepts both mandatory trips",
   assert.deepEqual(decisions.filter((item) => item.accepted).map((item) => item.reason), ["ACCEPTED_ALL", "ACCEPTED_ALL"]);
 });
 
-test("PRIORITY mode accepts forward and reverse directions of an enabled two-way route", async () => {
+test("PRIORITY mode accepts only the configured direction of an enabled route", async () => {
   const decisions = [];
   let calls = 0;
   const bot = new ZaloReplyBot({
@@ -501,8 +501,37 @@ test("PRIORITY mode accepts forward and reverse directions of an enabled two-way
   bot.onMessage(makeMessage({ data: { msgId: "priority-forward", content: "Bắc Ninh đi Hà Nội" } }));
   bot.onMessage(makeMessage({ data: { msgId: "priority-reverse", content: "Hà Nội về Bắc Ninh" } }));
   await flushPromises();
-  assert.equal(calls, 2);
-  assert.equal(decisions.filter((item) => item.reason === "ACCEPTED_PRIORITY").length, 2);
+  assert.equal(calls, 1);
+  assert.equal(decisions.filter((item) => item.reason === "ACCEPTED_PRIORITY").length, 1);
+  assert.equal(decisions.find((item) => item.messageId === "priority-reverse").reason, "IGNORED_WRONG_DIRECTION");
+});
+
+test("PRIORITY mode does not send Ok for a wrong price or an excluded keyword", async () => {
+  const decisions = [];
+  let calls = 0;
+  const bot = new ZaloReplyBot({
+    allowedGroupIds: new Set(["group-1"]), replyText: "Ok", sessionFile: "unused",
+    priorityOnly: true,
+    priorityRoutes: [createPriorityRoute({
+      id: "filtered-route",
+      origin: "Bắc Ninh",
+      destination: "Hà Nội",
+      prices: ["200k"],
+      excludedKeywords: ["chó", "mèo"],
+    })],
+    emit: (event, payload) => { if (event === "decision") decisions.push(payload); },
+  });
+  bot.api = { sendMessage: () => { calls += 1; return Promise.resolve(); } };
+
+  bot.onMessage(makeMessage({ data: { msgId: "wrong-price", content: "Bắc Ninh - Hà Nội 150k" } }));
+  bot.onMessage(makeMessage({ data: { msgId: "excluded-keyword", content: "Bắc Ninh Hà Nội 200k, chó mèo" } }));
+  bot.onMessage(makeMessage({ data: { msgId: "accepted-price", content: "Bắc Ninh Hà Nội 200k" } }));
+  await flushPromises();
+
+  assert.equal(calls, 1);
+  assert.equal(decisions.find((item) => item.messageId === "wrong-price").reason, "IGNORED_PRICE_MISMATCH");
+  assert.equal(decisions.find((item) => item.messageId === "excluded-keyword").reason, "IGNORED_EXCLUDED_KEYWORD");
+  assert.equal(decisions.find((item) => item.messageId === "accepted-price").reason, "ACCEPTED_PRIORITY");
 });
 
 test("PRIORITY mode responds immediately to enabled changes without a restart", async () => {
@@ -526,12 +555,12 @@ test("PRIORITY mode responds immediately to enabled changes without a restart", 
   assert.equal(decisions.at(-1).reason, "IGNORED_ROUTE_DISABLED");
 });
 
-test("PRIORITY mode rejects an unrelated pair and a reversed one-way route", () => {
+test("PRIORITY mode rejects an unrelated pair and a reversed route", () => {
   const decisions = [];
   const bot = new ZaloReplyBot({
     allowedGroupIds: new Set(["group-1"]), replyText: "Ok", sessionFile: "unused",
     priorityOnly: true,
-    priorityRoutes: [createPriorityRoute({ id: "one-way", origin: "Bắc Ninh", destination: "Hà Nội", twoWay: false })],
+    priorityRoutes: [createPriorityRoute({ id: "one-way", origin: "Bắc Ninh", destination: "Hà Nội" })],
     emit: (event, payload) => { if (event === "decision") decisions.push(payload); },
   });
   bot.api = { sendMessage: () => { throw new Error("must not send"); } };

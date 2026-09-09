@@ -11,6 +11,8 @@ describe("Android server URL policy", () => {
     "http://100.127.255.254:3001",
     "http://localhost:3001",
     "http://[::1]:3001",
+    "http://160.191.51.229:3001",
+    "http://example.com:3001",
     "https://bot.example.com",
   ])("accepts a safe endpoint: %s", (url) => {
     expect(validateNativeServerUrl(url)).toBe("");
@@ -19,9 +21,6 @@ describe("Android server URL policy", () => {
   test.each([
     "192.168.1.10:3001",
     "ftp://192.168.1.10:3001",
-    "http://8.8.8.8:3001",
-    "http://172.32.0.1:3001",
-    "http://example.com:3001",
     "http://192.168.1.10:3001/api",
   ])("rejects an unsafe or malformed endpoint: %s", (url) => {
     expect(validateNativeServerUrl(url)).not.toBe("");
