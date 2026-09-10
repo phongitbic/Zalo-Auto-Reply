@@ -31,32 +31,30 @@ const getSenderName = (message) => {
 
 export const containsOkWord = (text) => /(^|[^a-z0-9])ok(?=$|[^a-z0-9])/i.test(String(text));
 
-const getQuotePayload = (message) => {
+const buildReplyPayload = (message, senderName, senderId, replyText) => {
   const data = message?.data;
   const msgId = data?.msgId ?? data?.cliMsgId ?? data?.globalMsgId ?? data?.id;
-  if (!data || !msgId) return undefined;
+  const quote = data && msgId
+    ? {
+      uidFrom: data.uidFrom ?? data.fromUid,
+      msgId,
+      cliMsgId: data.cliMsgId ?? msgId,
+      ts: data.ts ?? data.timestamp,
+      msgType: data.msgType ?? data.type ?? "text",
+      content: data.content ?? "",
+      ttl: data.ttl ?? 0,
+    }
+    : undefined;
 
-  return {
-    uidFrom: data.uidFrom ?? data.fromUid,
-    msgId,
-    cliMsgId: data.cliMsgId ?? msgId,
-    ts: data.ts ?? data.timestamp,
-    msgType: data.msgType ?? data.type ?? "text",
-    content: data.content ?? "",
-    ttl: data.ttl ?? 0,
-  };
-};
-
-const getReplyPayload = (senderName, senderId, replyText, quote) => {
   if (!senderName || !senderId) return quote ? { msg: replyText, quote } : replyText;
 
   const mentionText = `@${senderName}`;
-  const msg = `${mentionText} ${replyText}`;
-  return {
-    msg,
+  const payload = {
+    msg: `${mentionText} ${replyText}`,
     mentions: [{ pos: 0, uid: String(senderId), len: mentionText.length }],
-    ...(quote ? { quote } : {}),
   };
+  if (quote) payload.quote = quote;
+  return payload;
 };
 
 const getGroupName = (message, threadId) =>
@@ -467,12 +465,11 @@ export class ZaloReplyBot {
       matchedRoute = `${result.route.origin} → ${result.route.destination}`;
     }
 
-    const quote = getQuotePayload(message);
-    const payload = getReplyPayload(
+    const payload = buildReplyPayload(
+      message,
       decisionBase.senderName,
       decisionBase.senderId,
-      this.replyText,
-      quote
+      this.replyText
     );
     const networkStartedAt = performance.now();
 
@@ -499,7 +496,9 @@ export class ZaloReplyBot {
 
     let sendPromise;
     try {
-      this.preconnectGroupTransport();
+      // Nền đã giữ nóng groupServiceOrigin mỗi groupPreconnectIntervalMs; chỉ tự gọi lại ở
+      // đây khi origin chưa từng được xác định (tin đầu tiên hoặc vừa reconnect).
+      if (!this.groupServiceOrigin) this.preconnectGroupTransport();
       sendPromise = Promise.resolve(this.api.sendMessage(payload, message.threadId, ThreadType.Group));
     } catch (error) {
       reportFailure(error);
