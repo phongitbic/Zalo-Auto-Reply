@@ -45,6 +45,7 @@ test("Bun/Elysia preserves the HTTP and Socket.IO contracts", { skip: !isBun }, 
     keepAliveIntervalMs: 15000,
     botState: { enabled: true, mode: "all" },
     botStateFile: path.join(directory, "bot-state.json"),
+    allowedGroupsFile: path.join(directory, "allowed-groups.json"),
     maxSocketConnections: 1,
     priorityRoutesFile: path.join(directory, "priority-routes.json"),
     redisUrl: "",
@@ -84,6 +85,45 @@ test("Bun/Elysia preserves the HTTP and Socket.IO contracts", { skip: !isBun }, 
     const bootstrap = await bootstrapResponse.json();
     assert.equal(bootstrap.status.operationMode, "ALL");
     assert.equal(bootstrap.orders, undefined);
+    const initialGroups = await request("/api/settings/groups");
+    assert.deepEqual((await initialGroups.json()).selectedGroupIds, ["group-1"]);
+    assert.equal((await request("/api/settings/groups/refresh", { method: "POST" })).status, 409);
+    runtime.bot.api = {
+      getAllGroups: async () => ({ gridVerMap: { "group-1": "1", "group-2": "1" } }),
+      getGroupInfo: async () => ({
+        gridInfoMap: {
+          "group-1": { name: "Nhóm Zeta" },
+          "group-2": { name: "Nhóm Alpha" },
+        },
+      }),
+    };
+    const refreshedGroups = await request("/api/settings/groups/refresh", { method: "POST" });
+    const refreshedGroupsBody = await refreshedGroups.json();
+    assert.deepEqual(refreshedGroupsBody.groups, [
+      { id: "group-2", name: "Nhóm Alpha" },
+      { id: "group-1", name: "Nhóm Zeta" },
+    ]);
+    assert.deepEqual(refreshedGroupsBody.selectedGroupIds, ["group-1"]);
+    const savedGroups = await request("/api/settings/groups", {
+      method: "PUT",
+      body: JSON.stringify({ selectedGroupIds: ["group-2", "group-2"] }),
+    });
+    const savedGroupsBody = await savedGroups.json();
+    assert.deepEqual(savedGroupsBody.selectedGroupIds, ["group-2"]);
+    assert.equal(savedGroupsBody.status.groupsConfigured, 1);
+    assert.deepEqual(JSON.parse(await fs.readFile(config.allowedGroupsFile, "utf8")), ["group-2"]);
+    assert.equal(runtime.bot.allowedGroupIds.has("group-1"), false);
+    assert.equal(runtime.bot.allowedGroupIds.has("group-2"), true);
+    assert.equal((await request("/api/settings/groups", {
+      method: "PUT",
+      body: JSON.stringify({ selectedGroupIds: "group-1" }),
+    })).status, 400);
+    const clearedGroups = await request("/api/settings/groups", {
+      method: "PUT",
+      body: JSON.stringify({ selectedGroupIds: [] }),
+    });
+    assert.deepEqual((await clearedGroups.json()).selectedGroupIds, []);
+    assert.equal(runtime.bot.allowedGroupIds.size, 0);
     const removedOrdersResponse = await request("/api/orders?limit=1");
     assert.doesNotMatch(removedOrdersResponse.headers.get("content-type") || "", /application\/json/i);
     assert.equal((await request("/api/zalo/qr")).status, 404);

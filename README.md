@@ -33,7 +33,7 @@ bun run build
 bun run dev
 ```
 
-Trước khi chạy, điền ít nhất `ALLOWED_GROUP_IDS` và `ADMIN_KEY` trong `server/.env`. `ADMIN_KEY` phải là chuỗi ngẫu nhiên từ 32 ký tự; cấu hình production sẽ từ chối khởi động nếu khóa trống, ngắn hoặc còn giá trị mẫu cũ.
+Trước khi chạy, điền `ADMIN_KEY` trong `server/.env`. `ADMIN_KEY` phải là chuỗi ngẫu nhiên từ 32 ký tự; cấu hình production sẽ từ chối khởi động nếu khóa trống, ngắn hoặc còn giá trị mẫu cũ. `ALLOWED_GROUP_IDS` chỉ là danh sách ban đầu/dự phòng; sau khi đăng nhập Zalo có thể tải và chọn nhóm trực tiếp trong giao diện.
 
 Có thể tạo khóa trên chính máy triển khai bằng PowerShell rồi tự chép kết quả vào `.env`:
 
@@ -47,7 +47,8 @@ Không commit `server/.env`, khóa ký Android, file QR hoặc session Zalo.
 
 Các biến quan trọng nằm trong [server/.env.example](server/.env.example):
 
-- `ALLOWED_GROUP_IDS`: ID nhóm, phân cách bằng dấu phẩy.
+- `ALLOWED_GROUP_IDS`: ID nhóm ban đầu/dự phòng, phân cách bằng dấu phẩy.
+- `ALLOWED_GROUPS_FILE`: file lưu danh sách nhóm được chọn trên giao diện; khi file này tồn tại, nó được ưu tiên hơn `.env`.
 - `CLIENT_ORIGINS`: origin web/Capacitor được phép kết nối.
 - `SESSION_FILE` và `QR_FILE`: session cùng QR đăng nhập được bảo vệ trên VPS.
 - `BOT_STATE_FILE`: lưu START/STOP và chế độ hiện tại.
@@ -216,6 +217,9 @@ Tất cả API `/api/*` yêu cầu `Authorization: Bearer <ADMIN_KEY>` hoặc `x
 | POST | `/api/bot/control` | `{ action: "start"|"stop", mode: "all"|"priority" }` |
 | POST | `/api/bot/enabled` | Tương thích client cũ với `{ enabled }` |
 | POST | `/api/bot/priority-only` | Tương thích client cũ với `{ enabled }` |
+| GET | `/api/settings/groups` | Đọc danh sách nhóm đã chọn trên máy chủ |
+| POST | `/api/settings/groups/refresh` | Tải ID và tên tất cả nhóm từ tài khoản Zalo đang đăng nhập |
+| PUT | `/api/settings/groups` | Lưu `{ selectedGroupIds: [...] }`, cho phép danh sách rỗng |
 | POST | `/api/settings/priority-routes/preview` | Kiểm tra file TXT, không thay đổi cấu hình |
 | POST | `/api/settings/priority-routes/import` | Nhập file TXT, trả 201 khi hợp lệ |
 | POST | `/api/settings/priority-routes` | Thêm một tuyến, trả 201 |
@@ -226,7 +230,7 @@ Tất cả API `/api/*` yêu cầu `Authorization: Bearer <ADMIN_KEY>` hoặc `x
 
 Dashboard và APK tiếp tục kết nối Socket.IO tại `/socket.io/`, chỉ dùng transport `websocket`, token nằm trong `auth.token` hoặc header `x-admin-key`. Bun Engine chính chủ của Socket.IO được gắn trực tiếp vào Elysia nên client không cần đổi giao thức. Khi kết nối, server gửi `status`; trong lúc chạy phát `status`, `stats`, `redis`, `qr`, `ORDER_ACCEPTED` và `ORDER_FAILED`. Sự kiện nội bộ `decision` chỉ dùng cho log khi bật `HOT_PATH_LOGGING`.
 
-Nhóm Zalo hiện được quản lý duy nhất bởi `ALLOWED_GROUP_IDS` trong `.env`; migration không tự thêm API nhóm mới để tránh đổi hành vi production.
+Trong trang Cài đặt, bấm **Tải danh sách nhóm Zalo**, tìm theo tên hoặc ID, tích/bỏ tích từng nhóm rồi bấm **Lưu nhóm đã chọn**. Cấu hình được áp dụng ngay bằng `Set` trong RAM và lưu tại `ALLOWED_GROUPS_FILE`; không cần khởi động lại bot. Nếu file chưa tồn tại, server mới dùng `ALLOWED_GROUP_IDS` từ `.env` làm cấu hình ban đầu.
 
 ## Kết quả xác minh
 

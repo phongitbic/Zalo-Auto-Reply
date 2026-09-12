@@ -62,7 +62,10 @@ function App() {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const error = new Error(response.status === 401 ? "Token quản trị không đúng" : result.error || "Máy chủ không phản hồi");
+      const message = response.status === 401
+        ? "Token quản trị không đúng"
+        : [result.error || "Máy chủ không phản hồi", result.detail].filter(Boolean).join(" ");
+      const error = new Error(message);
       error.payload = result;
       throw error;
     }
@@ -389,6 +392,7 @@ function App() {
       {page === "settings" && (
         <>
           <ZaloLogin status={status} apiUrl={apiUrl} token={adminToken} revision={qrRevision} />
+          <GroupSelector apiFetch={apiFetch} status={status} onStatus={setStatus} onNotice={setNotice} />
           <section className="settings panel">
             <h2>Thông báo Android</h2>
             {[["sound", "Âm thanh"], ["vibrate", "Rung"], ["speech", "Giọng đọc tiếng Việt"]].map(([key, label]) => (
@@ -461,6 +465,112 @@ function RoutesPage({ routes, visibleRoutes, routeSearch, setRouteSearch, routeF
 function RouteDialog({ draft, setDraft, busy, onSave, onClose }) {
   const field = (key) => (event) => setDraft((value) => ({ ...value, [key]: event.target.value }));
   return <div className="modal-backdrop"><section className="modal"><div className="section-heading"><h2>{draft.id ? "Chỉnh sửa tuyến" : "Thêm tuyến mới"}</h2><button className="icon-button" onClick={onClose}>×</button></div><label>Điểm đi</label><input required value={draft.origin} onChange={field("origin")} placeholder="Ví dụ: Bắc Ninh" /><label>Điểm đến</label><input required value={draft.destination} onChange={field("destination")} placeholder="Ví dụ: Hà Nội" /><label>Giá tiền (không bắt buộc)</label><textarea value={draft.prices} onChange={field("prices")} placeholder="Ví dụ: 200k; có thể nhập nhiều giá, ngăn cách bằng dấu phẩy" /><label>Từ khóa bị loại (không bắt buộc)</label><textarea value={draft.excludedKeywords} onChange={field("excludedKeywords")} placeholder="Ví dụ: chó, mèo" /><label className="switch-row"><span>Bật tuyến ngay</span><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((value) => ({ ...value, enabled: event.target.checked }))} /></label><div className="form-actions"><button className="secondary" onClick={onClose}>Hủy</button><button className="primary" disabled={busy || !draft.origin.trim() || !draft.destination.trim()} onClick={() => void onSave()}>{busy ? "Đang lưu…" : "Lưu trên máy chủ"}</button></div></section></div>;
+}
+
+function GroupSelector({ apiFetch, status, onStatus, onNotice }) {
+  const [groups, setGroups] = React.useState([]);
+  const [selectedGroupIds, setSelectedGroupIds] = React.useState([]);
+  const [savedGroupIds, setSavedGroupIds] = React.useState([]);
+  const [search, setSearch] = React.useState("");
+  const [loading, setLoading] = React.useState(true);
+  const [refreshing, setRefreshing] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
+
+  const mergeGroups = React.useCallback((availableGroups, selectedIds) => {
+    const merged = new Map((availableGroups || []).map((group) => [group.id, group]));
+    for (const id of selectedIds || []) {
+      if (!merged.has(id)) merged.set(id, { id, name: `Nhóm ${id}` });
+    }
+    return [...merged.values()].sort((left, right) => left.name.localeCompare(right.name, "vi"));
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    apiFetch("/api/settings/groups")
+      .then((result) => {
+        if (cancelled) return;
+        const selected = result.selectedGroupIds || [];
+        setGroups(mergeGroups(result.groups, selected));
+        setSelectedGroupIds(selected);
+        setSavedGroupIds(selected);
+      })
+      .catch((error) => { if (!cancelled) onNotice(error.message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [apiFetch, mergeGroups, onNotice]);
+
+  const refreshGroups = async () => {
+    setRefreshing(true);
+    try {
+      const result = await apiFetch("/api/settings/groups/refresh", { method: "POST" });
+      setGroups(mergeGroups(result.groups, selectedGroupIds));
+      onNotice(`Đã tải ${result.groups.length} nhóm từ tài khoản Zalo.`);
+    } catch (error) {
+      onNotice(error.message);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const saveGroups = async () => {
+    setSaving(true);
+    try {
+      const result = await apiFetch("/api/settings/groups", {
+        method: "PUT",
+        body: JSON.stringify({ selectedGroupIds }),
+      });
+      const selected = result.selectedGroupIds || [];
+      setSelectedGroupIds(selected);
+      setSavedGroupIds(selected);
+      setGroups((current) => mergeGroups(current, selected));
+      onStatus(result.status);
+      onNotice(`Đã lưu ${selected.length} nhóm được phép nhận đơn trên máy chủ.`);
+    } catch (error) {
+      onNotice(error.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const query = search.trim().toLocaleLowerCase("vi");
+  const visibleGroups = groups.filter((group) =>
+    !query || `${group.name} ${group.id}`.toLocaleLowerCase("vi").includes(query));
+  const selectedSet = new Set(selectedGroupIds);
+  const allVisibleSelected = visibleGroups.length > 0 && visibleGroups.every((group) => selectedSet.has(group.id));
+  const dirty = [...selectedGroupIds].sort().join("\0") !== [...savedGroupIds].sort().join("\0");
+
+  const toggleGroup = (id, checked) => {
+    setSelectedGroupIds((current) => checked
+      ? [...new Set([...current, id])]
+      : current.filter((groupId) => groupId !== id));
+  };
+
+  const toggleVisible = (checked) => {
+    const visibleIds = new Set(visibleGroups.map((group) => group.id));
+    setSelectedGroupIds((current) => checked
+      ? [...new Set([...current, ...visibleIds])]
+      : current.filter((id) => !visibleIds.has(id)));
+  };
+
+  return <section className="settings panel group-selector">
+    <div className="section-heading">
+      <div><span className="eyebrow">NHÓM ZALO</span><h2>Nhóm được phép nhận đơn</h2></div>
+      <span>{selectedGroupIds.length} nhóm đã chọn</span>
+    </div>
+    <div className="group-toolbar">
+      <button className="primary" disabled={loading || refreshing || status.status !== "online"} onClick={() => void refreshGroups()}>{refreshing ? "Đang tải…" : "Tải danh sách nhóm Zalo"}</button>
+      <button className="secondary" disabled={loading || saving || !dirty} onClick={() => void saveGroups()}>{saving ? "Đang lưu…" : "Lưu nhóm đã chọn"}</button>
+    </div>
+    <input type="search" placeholder="Tìm theo tên nhóm hoặc ID" value={search} onChange={(event) => setSearch(event.target.value)} />
+    <label className="group-select-all"><span>Chọn tất cả nhóm đang hiển thị</span><input type="checkbox" checked={allVisibleSelected} disabled={visibleGroups.length === 0} onChange={(event) => toggleVisible(event.target.checked)} /></label>
+    {loading
+      ? <p className="muted">Đang tải cấu hình nhóm đã lưu…</p>
+      : visibleGroups.length === 0
+        ? <p className="empty">Bấm “Tải danh sách nhóm Zalo” để lấy các nhóm từ tài khoản đang đăng nhập.</p>
+        : <div className="group-list">{visibleGroups.map((group) => <label className="group-row" key={group.id}><span><strong>{group.name}</strong><small>ID: {group.id}</small></span><input type="checkbox" checked={selectedSet.has(group.id)} onChange={(event) => toggleGroup(group.id, event.target.checked)} /></label>)}</div>}
+    <p className="muted">Bỏ dấu tích ở nhóm không chất lượng rồi bấm “Lưu nhóm đã chọn”. Thay đổi được áp dụng ngay, không cần khởi động lại bot.</p>
+  </section>;
 }
 
 function ImportDialog({ data, busy, onConfirm, onClose }) {

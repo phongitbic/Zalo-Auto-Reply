@@ -21,6 +21,20 @@ const splitIds = (value = "") =>
 const splitValues = (value = "") =>
   String(value).split(/[,;]+/).map((item) => item.trim()).filter(Boolean);
 
+const allowedGroupsFile = path.resolve(
+  currentDir,
+  "..",
+  process.env.ALLOWED_GROUPS_FILE || "data/allowed-groups.json"
+);
+const storedAllowedGroupIds = loadJsonFile(
+  allowedGroupsFile,
+  null,
+  (value) => Array.isArray(value) && value.every((id) => typeof id === "string" && id.trim())
+);
+const allowedGroupIds = storedAllowedGroupIds
+  ? new Set(storedAllowedGroupIds.map((id) => id.trim()))
+  : splitIds(process.env.ALLOWED_GROUP_IDS);
+
 const priorityRoutesFile = path.resolve(
   currentDir,
   "..",
@@ -46,7 +60,8 @@ export const config = {
   adminKey: process.env.ADMIN_KEY || "",
   sessionFile: path.resolve(currentDir, "..", process.env.SESSION_FILE || "data/zca-session.json"),
   qrFile: path.resolve(currentDir, "..", process.env.QR_FILE || "data/zalo-login-qr.png"),
-  allowedGroupIds: splitIds(process.env.ALLOWED_GROUP_IDS),
+  allowedGroupIds,
+  allowedGroupsFile,
   enabled: botState.enabled,
   mode: botState.mode,
   priorityOnly: botState.mode === "priority",

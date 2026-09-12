@@ -46,6 +46,50 @@ test("does not auto-reply to an empty or non-text message", () => {
   assert.equal(calls, 0);
 });
 
+test("applies selected and deselected groups immediately from the in-memory Set", async () => {
+  let calls = 0;
+  const bot = new ZaloReplyBot({
+    allowedGroupIds: new Set(["group-1"]),
+    replyText: "Ok",
+    sessionFile: "unused",
+  });
+  bot.api = { sendMessage: () => { calls += 1; return Promise.resolve(); } };
+  bot.setAllowedGroupIds(["group-2"]);
+
+  bot.onMessage(makeMessage({ threadId: "group-1", data: { msgId: "deselected", content: "Cầu Giấy 200k" } }));
+  bot.onMessage(makeMessage({ threadId: "group-2", data: { msgId: "selected", content: "Cầu Giấy 200k" } }));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(calls, 1);
+  assert.equal(bot.snapshot().groupsConfigured, 1);
+});
+
+test("loads large Zalo group lists in batches outside the message hot path", async () => {
+  const groupIds = Array.from({ length: 45 }, (_, index) => `group-${index}`);
+  const batchSizes = [];
+  const bot = new ZaloReplyBot({
+    allowedGroupIds: new Set(),
+    replyText: "Ok",
+    sessionFile: "unused",
+  });
+  bot.api = {
+    getAllGroups: async () => ({
+      gridVerMap: Object.fromEntries(groupIds.map((id) => [id, "1"])),
+    }),
+    getGroupInfo: async (batch) => {
+      batchSizes.push(batch.length);
+      return {
+        gridInfoMap: Object.fromEntries(batch.map((id) => [id, { name: `Tên ${id}` }])),
+      };
+    },
+  };
+
+  const groups = await bot.listZaloGroups();
+
+  assert.equal(groups.length, 45);
+  assert.deepEqual(batchSizes, [20, 20, 5]);
+});
+
 test("dispatches an eligible reply synchronously without waiting for network completion", async () => {
   let calls = 0;
   let finishRequest;

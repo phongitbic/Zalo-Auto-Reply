@@ -13,8 +13,11 @@ import { RedisCoordinator } from "./redis-coordinator.js";
 export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
   const stateStore = new PersistentJsonStore(config.botStateFile, config.botState);
   const routesStore = new PersistentJsonStore(config.priorityRoutesFile, config.priorityRoutes);
+  const groupsStore = new PersistentJsonStore(config.allowedGroupsFile, [...config.allowedGroupIds]);
   let priorityRoutes = config.priorityRoutes;
+  let allowedGroupIds = new Set(config.allowedGroupIds);
   let priorityRoutesMutation = Promise.resolve();
+  let allowedGroupsMutation = Promise.resolve();
   let redisCoordinator;
 
   const bot = new ZaloReplyBot({
@@ -96,6 +99,37 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
     return { ...bot.snapshot(), save };
   };
 
+  const getGroupSettings = () => ({
+    groups: bot.configuredGroups(),
+    selectedGroupIds: [...allowedGroupIds],
+  });
+
+  const validateGroupIds = (values) => {
+    if (!Array.isArray(values)) {
+      const error = new Error("Danh sách nhóm không hợp lệ.");
+      error.code = "INVALID_GROUPS";
+      throw error;
+    }
+    if (values.some((id) => typeof id !== "string" || !id.trim() || id.trim().length > 100)) {
+      const error = new Error("Mỗi ID nhóm phải là chuỗi hợp lệ, tối đa 100 ký tự.");
+      error.code = "INVALID_GROUPS";
+      throw error;
+    }
+    return [...new Set(values.map((id) => id.trim()))];
+  };
+
+  const updateAllowedGroups = (values) => {
+    const operation = allowedGroupsMutation.then(async () => {
+      const nextGroupIds = validateGroupIds(values);
+      await groupsStore.update(() => nextGroupIds);
+      allowedGroupIds = new Set(nextGroupIds);
+      bot.setAllowedGroupIds(allowedGroupIds);
+      return { status: bot.snapshot(), ...getGroupSettings() };
+    });
+    allowedGroupsMutation = operation.catch(() => {});
+    return operation;
+  };
+
   const importPreview = (content, fileName) => {
     const parsed = parsePriorityRouteFile(content, {
       fileName: path.basename(fileName || "priority-routes.txt"),
@@ -159,6 +193,12 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
     snapshot: () => bot.snapshot(),
     bootstrap: () => ({ status: bot.snapshot() }),
     getPriorityRoutes: () => priorityRoutes,
+    getGroupSettings,
+    refreshZaloGroups: async () => ({
+      groups: await bot.listZaloGroups(),
+      selectedGroupIds: [...allowedGroupIds],
+    }),
+    updateAllowedGroups,
     persistControl,
     importPreview,
     updatePriorityRoutes,

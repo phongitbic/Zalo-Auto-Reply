@@ -58,6 +58,27 @@ export const createApiRoutes = ({ config, runtime, tokenMatches }) =>
         return errorResponse(set, 500, "Không thể lưu chế độ bot.");
       }
     })
+    .get("/settings/groups", () => runtime.getGroupSettings())
+    .post("/settings/groups/refresh", async ({ set }) => {
+      try {
+        return await runtime.refreshZaloGroups();
+      } catch (error) {
+        if (error.code === "ZALO_OFFLINE") return errorResponse(set, 409, error.message);
+        console.error("Loading Zalo groups failed:", error);
+        return errorResponse(set, 502, "Không thể tải danh sách nhóm từ Zalo.", {
+          detail: String(error?.message || "Lỗi không xác định").slice(0, 300),
+        });
+      }
+    })
+    .put("/settings/groups", async ({ body, set }) => {
+      try {
+        return await runtime.updateAllowedGroups(body?.selectedGroupIds);
+      } catch (error) {
+        if (error.code === "INVALID_GROUPS") return errorResponse(set, 400, error.message);
+        console.error("Saving allowed Zalo groups failed:", error);
+        return errorResponse(set, 500, "Không thể lưu danh sách nhóm đã chọn.");
+      }
+    })
     .post("/settings/priority-routes/preview", ({ body, set }) => {
       const { content, fileName } = body ?? {};
       if (typeof content !== "string") {

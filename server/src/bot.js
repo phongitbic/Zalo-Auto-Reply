@@ -60,6 +60,20 @@ const buildReplyPayload = (message, senderName, senderId, replyText) => {
 const getGroupName = (message, threadId) =>
   message?.data?.groupName ?? message?.data?.groupTopic ?? `Nhóm ${threadId}`;
 
+const loadGroupInfoMap = async (api, groupIds) => {
+  const groupsById = {};
+  for (let index = 0; index < groupIds.length; index += 20) {
+    const batch = groupIds.slice(index, index + 20);
+    try {
+      const details = await api.getGroupInfo(batch);
+      Object.assign(groupsById, details.gridInfoMap ?? {});
+    } catch (cause) {
+      throw new Error(`Không lấy được tên nhóm ở lô ${Math.floor(index / 20) + 1}: ${cause.message}`, { cause });
+    }
+  }
+  return groupsById;
+};
+
 export class ZaloReplyBot {
   constructor({
     allowedGroupIds,
@@ -384,13 +398,43 @@ export class ZaloReplyBot {
   async refreshGroupNames() {
     if (!this.api || this.allowedGroupIds.size === 0) return;
     try {
-      const response = await this.api.getGroupInfo([...this.allowedGroupIds]);
-      for (const [groupId, group] of Object.entries(response.gridInfoMap ?? {})) {
+      const groupsById = await loadGroupInfoMap(this.api, [...this.allowedGroupIds]);
+      for (const [groupId, group] of Object.entries(groupsById)) {
         if (group?.name) this.groupNames.set(String(groupId), group.name);
       }
     } catch (error) {
       if (this.hotPathLogging) console.warn("Loading Zalo group names failed:", error.message);
     }
+  }
+
+  configuredGroups() {
+    return [...this.allowedGroupIds]
+      .map((id) => ({ id, name: this.groupNames.get(id) ?? `Nhóm ${id}` }))
+      .sort((left, right) => left.name.localeCompare(right.name, "vi"));
+  }
+
+  async listZaloGroups() {
+    if (!this.api) {
+      const error = new Error("Zalo chưa đăng nhập.");
+      error.code = "ZALO_OFFLINE";
+      throw error;
+    }
+    let response;
+    try {
+      response = await this.api.getAllGroups();
+    } catch (cause) {
+      throw new Error(`Không lấy được ID nhóm: ${cause.message}`, { cause });
+    }
+    const groupIds = Object.keys(response.gridVerMap ?? {});
+    if (groupIds.length === 0) return [];
+    const groupsById = await loadGroupInfoMap(this.api, groupIds);
+    const groups = groupIds.map((id) => {
+      const group = groupsById[id];
+      const name = group?.name || this.groupNames.get(id) || `Nhóm ${id}`;
+      this.groupNames.set(id, name);
+      return { id, name };
+    });
+    return groups.sort((left, right) => left.name.localeCompare(right.name, "vi"));
   }
 
   onMessage(message) {
@@ -588,6 +632,12 @@ export class ZaloReplyBot {
   setPriorityRoutes(routes) {
     this.priorityRoutes = routes;
     this.compiledPriorityRoutes = compilePriorityRoutes(routes);
+    this.configUpdatedAt = new Date().toISOString();
+    this.publish();
+  }
+
+  setAllowedGroupIds(groupIds) {
+    this.allowedGroupIds = new Set(groupIds);
     this.configUpdatedAt = new Date().toISOString();
     this.publish();
   }
