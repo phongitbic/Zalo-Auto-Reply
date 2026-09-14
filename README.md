@@ -20,6 +20,8 @@ Ba trạng thái nhận đơn được lưu tại máy chủ:
 
 `ORDER_ACCEPTED` chỉ được phát sau khi lệnh gửi Zalo hoàn tất thành công. Tin đến có từ `Ok`, tin trùng, sai nhóm hoặc không khớp tuyến không tạo thông báo nhận đơn.
 
+Nếu cùng một người gửi cùng nội dung vào nhiều nhóm trong vòng 10 giây, bot chỉ trả lời tin đến đầu tiên. Việc chống trùng này chạy trong RAM; nội dung giống nhau từ hai người gửi khác nhau vẫn được xử lý độc lập.
+
 ## Chạy và kiểm thử local
 
 Yêu cầu Bun 1.4.1 trở lên; build Android cần thêm JDK 21 và Android SDK.

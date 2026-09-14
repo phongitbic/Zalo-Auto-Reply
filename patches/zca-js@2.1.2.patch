@@ -1,0 +1,66 @@
+diff --git a/dist/cjs/utils.cjs b/dist/cjs/utils.cjs
+index b49a0ba3996dd960e2f2e4131d3c6ae902b9cc75..a43def07372b385bd78b71359d0daa36624f49af 100644
+--- a/dist/cjs/utils.cjs
++++ b/dist/cjs/utils.cjs
+@@ -338,6 +338,17 @@ async function getGifMetaData(ctx, filePath) {
+         height: gifData.height,
+     };
+ }
++let cachedEventCipherKey;
++let cachedEventCryptoKeyPromise;
++function getEventCryptoKey(cipherKey) {
++    if (cipherKey !== cachedEventCipherKey || !cachedEventCryptoKeyPromise) {
++        cachedEventCipherKey = cipherKey;
++        cachedEventCryptoKeyPromise = crypto.subtle.importKey("raw", decodeBase64ToBuffer(cipherKey), "AES-GCM", false, [
++            "decrypt",
++        ]);
++    }
++    return cachedEventCryptoKeyPromise;
++}
+ async function decodeEventData(parsed, cipherKey) {
+     if (typeof parsed.data !== "string")
+         throw new ZaloApiError.ZaloApiError(`Invalid data, expected string but got ${typeof parsed.data}`);
+@@ -360,9 +371,7 @@ async function decodeEventData(parsed, cipherKey) {
+                 additionalData: decodedBuffer.subarray(16, 32),
+             };
+             const dataSource = decodedBuffer.subarray(32);
+-            const cryptoKey = await crypto.subtle.importKey("raw", decodeBase64ToBuffer(cipherKey), algorithm, false, [
+-                "decrypt",
+-            ]);
++            const cryptoKey = await getEventCryptoKey(cipherKey);
+             decryptedBuffer = await crypto.subtle.decrypt(algorithm, cryptoKey, dataSource);
+         }
+         else {
+diff --git a/dist/utils.js b/dist/utils.js
+index a23e1bae1a7851ef46788f5f35487c1ae0d9f7ce..976f66b733fde37d1be25f3599f565a27e37c615 100644
+--- a/dist/utils.js
++++ b/dist/utils.js
+@@ -334,6 +334,17 @@ export async function getGifMetaData(ctx, filePath) {
+         height: gifData.height,
+     };
+ }
++let cachedEventCipherKey;
++let cachedEventCryptoKeyPromise;
++function getEventCryptoKey(cipherKey) {
++    if (cipherKey !== cachedEventCipherKey || !cachedEventCryptoKeyPromise) {
++        cachedEventCipherKey = cipherKey;
++        cachedEventCryptoKeyPromise = crypto.subtle.importKey("raw", decodeBase64ToBuffer(cipherKey), "AES-GCM", false, [
++            "decrypt",
++        ]);
++    }
++    return cachedEventCryptoKeyPromise;
++}
+ export async function decodeEventData(parsed, cipherKey) {
+     if (typeof parsed.data !== "string")
+         throw new ZaloApiError(`Invalid data, expected string but got ${typeof parsed.data}`);
+@@ -356,9 +367,7 @@ export async function decodeEventData(parsed, cipherKey) {
+                 additionalData: decodedBuffer.subarray(16, 32),
+             };
+             const dataSource = decodedBuffer.subarray(32);
+-            const cryptoKey = await crypto.subtle.importKey("raw", decodeBase64ToBuffer(cipherKey), algorithm, false, [
+-                "decrypt",
+-            ]);
++            const cryptoKey = await getEventCryptoKey(cipherKey);
+             decryptedBuffer = await crypto.subtle.decrypt(algorithm, cryptoKey, dataSource);
+         }
+         else {

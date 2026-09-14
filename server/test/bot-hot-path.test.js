@@ -630,6 +630,60 @@ test("a processed message is replied to and announced only once", async () => {
   assert.equal(events.find((item) => item.payload.reason === "IGNORED_DUPLICATE")?.payload.accepted, false);
 });
 
+test("accepts one order when the same sender posts identical content across 80 groups", async () => {
+  const groupIds = Array.from({ length: 80 }, (_, index) => `group-${index + 1}`);
+  const decisions = [];
+  const sentTo = [];
+  const bot = new ZaloReplyBot({
+    allowedGroupIds: new Set(groupIds), replyText: "Ok", sessionFile: "unused",
+    emit: (event, payload) => { if (event === "decision") decisions.push(payload); },
+  });
+  bot.api = {
+    sendMessage: (_payload, threadId) => {
+      sentTo.push(threadId);
+      return Promise.resolve();
+    },
+  };
+
+  groupIds.forEach((threadId, index) => {
+    bot.onMessage(makeMessage({
+      threadId,
+      data: {
+        msgId: `same-order-${index}`,
+        uidFrom: "same-sender",
+        dName: "Khánh",
+        content: "Bắc Ninh đi Hà Nội 200k",
+      },
+    }));
+  });
+  await flushPromises();
+
+  assert.deepEqual(sentTo, ["group-1"]);
+  assert.equal(decisions.filter((item) => item.reason === "IGNORED_DUPLICATE_ORDER").length, 79);
+  assert.equal(bot.stats.sent, 1);
+});
+
+test("accepts identical content from different senders", async () => {
+  let calls = 0;
+  const bot = new ZaloReplyBot({
+    allowedGroupIds: new Set(["group-1", "group-2"]), replyText: "Ok", sessionFile: "unused",
+  });
+  bot.api = { sendMessage: () => { calls += 1; return Promise.resolve(); } };
+
+  bot.onMessage(makeMessage({
+    threadId: "group-1",
+    data: { msgId: "sender-one", uidFrom: "sender-1", content: "Bắc Ninh đi Hà Nội 200k" },
+  }));
+  bot.onMessage(makeMessage({
+    threadId: "group-2",
+    data: { msgId: "sender-two", uidFrom: "sender-2", content: "Bắc Ninh đi Hà Nội 200k" },
+  }));
+  await flushPromises();
+
+  assert.equal(calls, 2);
+  assert.equal(bot.stats.sent, 2);
+});
+
 test("releases the in-memory dedupe reservation when sending fails", async () => {
   let calls = 0;
   const bot = new ZaloReplyBot({

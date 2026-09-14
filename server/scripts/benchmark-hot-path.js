@@ -29,7 +29,7 @@ const dispatch = (messageId) => {
     isSelf: false,
     data: {
       msgId: messageId,
-      content: "Diem di 4999 den Diem den 4999",
+      content: `Diem di 4999 den Diem den 4999 ${messageId}`,
       uidFrom: "benchmark-user",
       dName: "Khanh",
     },

@@ -19,5 +19,8 @@
     "@capacitor/android": "^8.5.1",
     "@capacitor/cli": "^8.5.1",
     "concurrently": "^9.2.1"
+  },
+  "patchedDependencies": {
+    "zca-js@2.1.2": "patches/zca-js@2.1.2.patch"
   }
 }

@@ -31,6 +31,11 @@ const getSenderName = (message) => {
 
 export const containsOkWord = (text) => /(^|[^a-z0-9])ok(?=$|[^a-z0-9])/i.test(String(text));
 
+const getOrderDedupeKey = (senderId, text) => {
+  if (!senderId) return null;
+  return `${senderId}\u0000${text}`;
+};
+
 const buildReplyPayload = (message, senderName, senderId, replyText) => {
   const data = message?.data;
   const msgId = data?.msgId ?? data?.cliMsgId ?? data?.globalMsgId ?? data?.id;
@@ -149,6 +154,7 @@ export class ZaloReplyBot {
     this.redis = { status: "disabled", connected: false, version: 0, lastSyncedAt: null, error: null };
     this.configUpdatedAt = configUpdatedAt;
     this.seen = new RecentMessageCache();
+    this.recentOrders = new RecentMessageCache(10_000);
     for (const item of recentMessages) {
       if (item?.groupId && item?.messageId) {
         this.seen.hasOrAdd(`${item.groupId}:${item.messageId}`);
@@ -509,6 +515,17 @@ export class ZaloReplyBot {
       matchedRoute = `${result.route.origin} → ${result.route.destination}`;
     }
 
+    const orderDedupeKey = getOrderDedupeKey(decisionBase.senderId, incomingText);
+    if (orderDedupeKey && this.recentOrders.hasOrAdd(orderDedupeKey)) {
+      this.emit("decision", {
+        ...decisionBase,
+        accepted: false,
+        reason: "IGNORED_DUPLICATE_ORDER",
+        matchedRoute,
+      });
+      return;
+    }
+
     const payload = buildReplyPayload(
       message,
       decisionBase.senderName,
@@ -520,6 +537,7 @@ export class ZaloReplyBot {
     // Calling the async function starts request preparation synchronously up to its first await.
     const reportFailure = (error) => {
       this.seen.delete(dedupeKey);
+      if (orderDedupeKey) this.recentOrders.delete(orderDedupeKey);
       this.stats.failed += 1;
       console.error(`Send failed for group ${threadId}:`, error);
       this.emit("ORDER_FAILED", {
