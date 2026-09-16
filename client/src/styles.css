@@ -119,10 +119,18 @@ button.danger { border: 0; color: #fff; background: #b52649; font-weight: 800; }
 details { color: #9db0c9; }
 code { color: #8eb6ff; overflow-wrap: anywhere; }
 
-.connect-shell { min-height: 100vh; display: grid; place-items: center; padding: 20px 0; }
-.connect-card { width: min(480px, 100%); display: grid; gap: 13px; }
-.brand-mark { width: 52px; height: 52px; display: grid; place-items: center; border-radius: 16px; color: white; background: #2864e8; font-size: 25px; font-weight: 900; }
-.connect-card h1 { margin-bottom: 0; }
+.connect-shell { min-height: 100vh; display: grid; place-items: center; padding: 24px 0; }
+.connect-card { width: min(460px, 100%); display: grid; gap: 14px; padding: 30px; }
+.brand-mark { width: fit-content; min-width: 86px; height: 50px; display: grid; place-items: center; padding: 0 18px; border-radius: 16px; color: white; background: linear-gradient(135deg, #3478f6, #2456db); box-shadow: 0 12px 30px #1f55cf4d; font-size: 20px; font-weight: 900; letter-spacing: -.4px; }
+.connect-heading { margin: 8px 0 6px; }
+.connect-heading h1 { margin: 0 0 8px; font-size: clamp(32px, 8vw, 42px); line-height: 1.05; letter-spacing: -1.4px; }
+.connect-heading p { margin: 0; font-size: 15px; }
+.connect-card > input, .password-field input { min-height: 52px; }
+.password-field { position: relative; }
+.password-field input { padding-right: 68px; }
+.token-toggle { position: absolute; top: 50%; right: 8px; min-width: 50px; padding: 8px 10px; transform: translateY(-50%); border: 0; border-radius: 9px; color: #8eb6ff; background: transparent; font-size: 12px; font-weight: 800; }
+.token-toggle:hover, .token-toggle:focus-visible { color: #fff; background: #245ad633; outline: none; }
+.connect-card button.large { min-height: 58px; margin-top: 6px; font-size: 17px; }
 .notice { position: fixed; z-index: 10; right: 22px; bottom: 22px; max-width: min(440px, calc(100% - 44px)); padding: 14px 18px; border: 1px solid #46627f; border-radius: 13px; color: #fff; background: #19304a; box-shadow: 0 18px 45px #000a; text-align: left; }
 .notice.inline { position: static; max-width: none; }
 .zalo-login-status { padding: 7px 10px; border-radius: 999px; color: #fbbf24; background: #713f123d; font-size: 12px; font-weight: 800; }
@@ -160,6 +168,8 @@ code { color: #8eb6ff; overflow-wrap: anywhere; }
   .preview-summary { background: #f1f6fc; }
   .preview-summary strong, .preview-summary span { color: #273c58; }
   .group-select-all, .group-row { border-color: #d6e1ee; background: #f8fbff; }
+  .token-toggle { color: #2d62c8; }
+  .token-toggle:hover, .token-toggle:focus-visible { color: #153c8f; background: #dce9ff; }
 }
 
 @media (max-width: 700px) {
@@ -180,6 +190,7 @@ code { color: #8eb6ff; overflow-wrap: anywhere; }
 }
 
 @media (max-width: 430px) {
+  .connect-card { padding: 24px 20px; border-radius: 18px; }
   .nav-tabs { grid-template-columns: repeat(2, 1fr); }
   .route-toolbar { grid-template-columns: 1fr; }
   .route-toolbar input[type="search"] { grid-column: auto; }

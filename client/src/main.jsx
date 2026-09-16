@@ -155,7 +155,7 @@ function App() {
         socket.on("disconnect", () => setConnectionState("disconnected"));
         socket.on("connect_error", (error) => {
           setConnectionState("error");
-          setNotice(error.message === "Unauthorized" ? "Token quản trị không đúng" : "Mất kết nối máy chủ");
+          setNotice(error.message === "Unauthorized" ? "Token quản trị không đúng" : "Mất kết nối Zcar");
         });
         socket.on("status", setStatus);
         socket.on("qr", (event) => setQrRevision(event?.updatedAt || String(Date.now())));
@@ -404,11 +404,11 @@ function App() {
       )}
       {page === "connection" && (
         <section className="settings panel">
-          <h2>Kết nối máy chủ</h2>
-          <label htmlFor="settings-url">Địa chỉ máy chủ</label>
-          <input id="settings-url" placeholder={isNative ? "http://192.168.1.10:3001" : "Để trống nếu mở từ chính máy chủ"} value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} />
+          <h2>Thông tin kết nối</h2>
+          <label htmlFor="settings-url">Địa chỉ kết nối</label>
+          <input id="settings-url" placeholder="Nhập địa chỉ kết nối" value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} />
           <label htmlFor="settings-token">Token quản trị</label>
-          <input id="settings-token" type="password" value={adminToken} onChange={(event) => setAdminToken(event.target.value)} />
+          <input id="settings-token" type="password" placeholder="Nhập token quản trị" value={adminToken} onChange={(event) => setAdminToken(event.target.value)} />
           <button className="primary" onClick={() => void connect()}>Lưu và kết nối lại</button>
         </section>
       )}
@@ -421,15 +421,19 @@ function App() {
 }
 
 function ConnectScreen({ serverUrl, setServerUrl, adminToken, setAdminToken, connectionState, connect, notice }) {
+  const [showToken, setShowToken] = React.useState(false);
   return (
     <main className="connect-shell"><section className="connect-card">
-      <div className="brand-mark">Z</div><h1>Kết nối máy chủ</h1>
-      <p>Điện thoại cùng Wi-Fi: nhập IP máy chạy backend, ví dụ <code>http://192.168.1.10:3001</code>. Token quản trị lấy từ file <code>server/.env</code>.</p>
-      <label htmlFor="server-url">Địa chỉ máy chủ</label>
-      <input id="server-url" inputMode="url" autoCapitalize="none" autoCorrect="off" placeholder={isNative ? "http://192.168.1.10:3001" : "Để trống nếu mở từ chính máy chủ"} value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} />
+      <div className="brand-mark">Zcar</div>
+      <div className="connect-heading"><h1>Đăng nhập Zcar</h1><p>Nhập thông tin truy cập để tiếp tục.</p></div>
+      <label htmlFor="server-url">Địa chỉ kết nối</label>
+      <input id="server-url" inputMode="url" autoCapitalize="none" autoCorrect="off" placeholder="Nhập địa chỉ kết nối" value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} />
       <label htmlFor="admin-token">Token quản trị</label>
-      <input id="admin-token" type="password" autoComplete="current-password" value={adminToken} onChange={(event) => setAdminToken(event.target.value)} />
-      <button className="primary large" disabled={connectionState === "connecting"} onClick={() => void connect()}>{connectionState === "connecting" ? "Đang kết nối…" : "Kết nối"}</button>
+      <div className="password-field">
+        <input id="admin-token" type={showToken ? "text" : "password"} autoComplete="current-password" placeholder="Nhập token quản trị" value={adminToken} onChange={(event) => setAdminToken(event.target.value)} />
+        <button type="button" className="token-toggle" aria-label={showToken ? "Ẩn token quản trị" : "Hiện token quản trị"} onClick={() => setShowToken((value) => !value)}>{showToken ? "Ẩn" : "Hiện"}</button>
+      </div>
+      <button className="primary large" disabled={connectionState === "connecting"} onClick={() => void connect()}>{connectionState === "connecting" ? "Đang đăng nhập…" : "Đăng nhập"}</button>
       {notice && <div className="notice inline">{notice}</div>}
     </section></main>
   );

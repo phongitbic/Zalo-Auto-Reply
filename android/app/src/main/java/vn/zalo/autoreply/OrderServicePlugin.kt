@@ -59,7 +59,7 @@ class OrderServicePlugin : Plugin() {
         val serverUrl = ServerUrlPolicy.normalize(call.getString("serverUrl"))
         val token = call.getString("token")
         if (serverUrl == null) {
-            call.reject("Địa chỉ máy chủ phải bắt đầu bằng http:// hoặc https:// và không có đường dẫn")
+            call.reject("Địa chỉ kết nối phải bắt đầu bằng http:// hoặc https:// và không có đường dẫn")
             return
         }
         if (token.isNullOrBlank()) {
