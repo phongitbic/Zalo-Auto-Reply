@@ -217,6 +217,7 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
     }
     return createPriorityRoute({
       ...existing,
+      title: body.title ?? existing.title ?? "",
       origin,
       destination,
       enabled: body.enabled ?? existing.enabled ?? true,

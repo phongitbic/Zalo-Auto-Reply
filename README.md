@@ -255,7 +255,7 @@ Các file migration chính:
 
 ## Android
 
-Ứng dụng dùng đúng các quyền phục vụ kết nối mạng, foreground service `remoteMessaging` và thông báo/rung. FAB START/STOP/Đã xử lý nằm bên trong ứng dụng, không dùng quyền overlay và không hiển thị đè lên ứng dụng khác. Token không nằm trong APK hoặc Android WebView localStorage; người dùng nhập lúc cài đặt và native service mã hóa token bằng Android Keystore.
+Ứng dụng dùng các quyền phục vụ kết nối mạng, foreground service `remoteMessaging`, thông báo/rung và `SYSTEM_ALERT_WINDOW`. Nút điều khiển nổi native có thể kéo trên màn hình: xanh lá để START, đỏ để STOP và xanh dương khi có đơn đã nhận; chạm nút xanh dương để xem đơn và xác nhận **Đã xử lý**. Có thể tắt nút nổi trong phần **Cài đặt**. Token không nằm trong APK hoặc Android WebView localStorage; người dùng nhập lúc cài đặt và native service mã hóa token bằng Android Keystore.
 
 ### Debug
 

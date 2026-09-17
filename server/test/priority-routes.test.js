@@ -43,12 +43,12 @@ test("parses TXT routes as enabled one-way routes", () => {
 });
 
 test("reports every malformed TXT line with exact line and reason", () => {
-  const result = parsePriorityRouteFile("Bắc Ninh Hà Nội\nA | B | C\n | Hà Nội\nBắc Ninh | Bắc Ninh");
+  const result = parsePriorityRouteFile("Bắc Ninh Hà Nội\nA | B | C\n | Hà Nội\nBắc Ninh | ");
   assert.deepEqual(result.errors.map(({ line, reason }) => ({ line, reason })), [
     { line: 1, reason: "Mỗi dòng phải có đúng một dấu |." },
     { line: 2, reason: "Mỗi dòng phải có đúng một dấu |." },
     { line: 3, reason: "Thiếu điểm đi." },
-    { line: 4, reason: "Điểm đi và điểm đến không được trùng nhau." },
+    { line: 4, reason: "Thiếu điểm đến." },
   ]);
 });
 
@@ -103,6 +103,32 @@ test("allows 250 locations per side and rejects the 251st", () => {
     () => createPriorityRoute({ id: "limit-251", origin: [...origins, "Điểm đi 250"], destination: destinations }),
     /tối đa 250 địa chỉ/
   );
+});
+
+test("allows a location to exist on both sides without using one occurrence twice", () => {
+  const configured = createPriorityRoute({
+    id: "overlap",
+    title: "Bắc Ninh → Hà Nội",
+    origin: "Bắc Ninh, Hoàng Quốc Việt",
+    destination: "Hà Nội, Hoàng Quốc Việt",
+  });
+  const compiled = compilePriorityRoutes([configured]);
+
+  assert.equal(configured.title, "Bắc Ninh → Hà Nội");
+  assert.equal(matchPriorityRoute("bac ninh di hoang quoc viet", compiled).reason, "ACCEPTED_PRIORITY");
+  assert.equal(matchPriorityRoute("hoang quoc viet di ha noi", compiled).reason, "ACCEPTED_PRIORITY");
+  assert.equal(matchPriorityRoute("hoang quoc viet", compiled).reason, "IGNORED_INVALID_MESSAGE");
+  assert.equal(matchPriorityRoute("hoang quoc viet di hoang quoc viet", compiled).reason, "ACCEPTED_PRIORITY");
+  assert.equal(matchPriorityRoute("ha noi don hoang quoc viet", compiled).reason, "IGNORED_WRONG_DIRECTION");
+});
+
+test("creates a short route title when none is supplied", () => {
+  const configured = createPriorityRoute({
+    id: "automatic-title",
+    origin: "Bắc Ninh, Võ Cường",
+    destination: "Hà Nội, Mỹ Đình",
+  });
+  assert.equal(configured.title, "Bắc Ninh → Hà Nội");
 });
 
 test("rejects the reverse direction even when legacy data enables two-way", () => {

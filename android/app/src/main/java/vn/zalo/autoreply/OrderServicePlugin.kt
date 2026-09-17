@@ -41,7 +41,27 @@ class OrderServicePlugin : Plugin() {
             .putBoolean("sound", settings.optBoolean("sound", true))
             .putBoolean("vibrate", settings.optBoolean("vibrate", true))
             .putBoolean("speech", settings.optBoolean("speech", false))
+            .putBoolean(OverlayController.PREFERENCE_ENABLED, settings.optBoolean("overlay", true))
             .apply()
+    }
+
+    private fun overlayGranted() = Settings.canDrawOverlays(context)
+
+    private fun openOverlaySettings() {
+        context.startActivity(
+            Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:${context.packageName}")
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+
+    private fun refreshOverlay() {
+        ContextCompat.startForegroundService(
+            context,
+            Intent(context, OrderForegroundService::class.java)
+                .setAction(OrderForegroundService.ACTION_REFRESH_OVERLAY)
+        )
     }
 
     @PluginMethod
@@ -79,6 +99,13 @@ class OrderServicePlugin : Plugin() {
             Intent(context, OrderForegroundService::class.java).setAction(OrderForegroundService.ACTION_CONNECT)
         )
         call.resolve()
+        val preferences = context.getSharedPreferences(OrderForegroundService.PREFERENCES, 0)
+        if (settings.optBoolean("overlay", true) && !overlayGranted() &&
+            !preferences.getBoolean(OverlayController.PREFERENCE_PROMPTED, false)
+        ) {
+            preferences.edit().putBoolean(OverlayController.PREFERENCE_PROMPTED, true).apply()
+            openOverlaySettings()
+        }
     }
 
     @PluginMethod
@@ -91,6 +118,30 @@ class OrderServicePlugin : Plugin() {
     fun updateSettings(call: PluginCall) {
         saveSettings(call.getObject("settings") ?: JSObject())
         call.resolve()
+    }
+
+    @PluginMethod
+    fun setOverlayEnabled(call: PluginCall) {
+        val enabled = call.getBoolean("enabled") ?: false
+        context.getSharedPreferences(OrderForegroundService.PREFERENCES, 0).edit()
+            .putBoolean(OverlayController.PREFERENCE_ENABLED, enabled)
+            .apply()
+        refreshOverlay()
+        if (enabled && !overlayGranted()) openOverlaySettings()
+        call.resolve(JSObject().apply {
+            put("enabled", enabled)
+            put("granted", overlayGranted())
+        })
+    }
+
+    @PluginMethod
+    fun getOverlayState(call: PluginCall) {
+        val enabled = context.getSharedPreferences(OrderForegroundService.PREFERENCES, 0)
+            .getBoolean(OverlayController.PREFERENCE_ENABLED, true)
+        call.resolve(JSObject().apply {
+            put("enabled", enabled)
+            put("granted", overlayGranted())
+        })
     }
 
     @PluginMethod

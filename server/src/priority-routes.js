@@ -43,15 +43,12 @@ const validateEndpoints = (origin, destination) => {
   if ([...origins, ...destinations].some((value) => value.length > 200)) {
     return "Mỗi địa chỉ tối đa 200 ký tự.";
   }
-  const originSet = new Set(origins.map(normalizeLocation));
-  if (destinations.some((value) => originSet.has(normalizeLocation(value)))) {
-    return "Điểm đi và điểm đến không được trùng nhau.";
-  }
   return null;
 };
 
 export const createPriorityRoute = ({
   id = randomUUID(),
+  title = "",
   origin,
   destination,
   enabled = true,
@@ -69,12 +66,19 @@ export const createPriorityRoute = ({
     throw error;
   }
 
-  const cleanOrigin = cleanTerms(origin).join(", ");
-  const cleanDestination = cleanTerms(destination).join(", ");
+  const origins = cleanTerms(origin);
+  const destinations = cleanTerms(destination);
+  const cleanTitle = cleanLabel(title) || `${origins[0]} → ${destinations[0]}`;
+  if (cleanTitle.length > 120) {
+    const error = new Error("Tên tuyến tối đa 120 ký tự.");
+    error.code = "INVALID_ROUTE";
+    throw error;
+  }
   return {
     id: String(id),
-    origin: cleanOrigin,
-    destination: cleanDestination,
+    title: cleanTitle,
+    origin: origins.join(", "),
+    destination: destinations.join(", "),
     enabled: Boolean(enabled),
     prices: cleanTerms(prices),
     excludedKeywords: cleanTerms(excludedKeywords),
@@ -190,6 +194,18 @@ export const compilePriorityRoutes = (routes = []) => {
       addTerm(term, item.index, "destinationRouteIndexes");
     }
   }
+  for (const entry of entriesByTerm.values()) {
+    if (entry.originRouteIndexes.length === 0 || entry.destinationRouteIndexes.length === 0) {
+      entry.sharedRouteIndexes = [];
+      continue;
+    }
+    const originIndexes = new Set(entry.originRouteIndexes);
+    entry.sharedRouteIndexes = entry.destinationRouteIndexes.filter((routeIndex) => originIndexes.has(routeIndex));
+    if (entry.sharedRouteIndexes.length === 0) continue;
+    const sharedIndexes = new Set(entry.sharedRouteIndexes);
+    entry.originRouteIndexes = entry.originRouteIndexes.filter((routeIndex) => !sharedIndexes.has(routeIndex));
+    entry.destinationRouteIndexes = entry.destinationRouteIndexes.filter((routeIndex) => !sharedIndexes.has(routeIndex));
+  }
   const termTrie = { children: new Map(), entry: null };
   for (const entry of entriesByTerm.values()) {
     const tokens = entry.term.split(" ");
@@ -242,7 +258,7 @@ const findRouteCandidates = (normalizedMessage, compiled) => {
       node = node.children.get(messageTokens[cursor]);
       if (!node) break;
       const entry = node.entry;
-      if (!entry || entry.seenGeneration === generation) continue;
+      if (!entry || (entry.sharedRouteIndexes.length === 0 && entry.seenGeneration === generation)) continue;
       entry.seenGeneration = generation;
       occurrenceCount += 1;
       for (const routeIndex of entry.originRouteIndexes) {
@@ -256,6 +272,19 @@ const findRouteCandidates = (normalizedMessage, compiled) => {
         compiled.destinationSeen[routeIndex] = generation;
         compiled.destinationPositions[routeIndex] = index;
         if (compiled.originSeen[routeIndex] === generation) candidates.push(routeIndex);
+      }
+      for (const routeIndex of entry.sharedRouteIndexes) {
+        if (compiled.originSeen[routeIndex] !== generation) {
+          compiled.originSeen[routeIndex] = generation;
+          compiled.originPositions[routeIndex] = index;
+          if (compiled.destinationSeen[routeIndex] === generation) candidates.push(routeIndex);
+          continue;
+        }
+        if (compiled.destinationSeen[routeIndex] !== generation && compiled.originPositions[routeIndex] !== index) {
+          compiled.destinationSeen[routeIndex] = generation;
+          compiled.destinationPositions[routeIndex] = index;
+          candidates.push(routeIndex);
+        }
       }
     }
   }
@@ -339,6 +368,7 @@ export const getPriorityRouteStats = (routes = []) => ({
 
 export const summarizePriorityRoutes = (routes = []) => routes.map((route) => ({
   id: route.id,
+  title: route.title,
   origin: route.origin,
   destination: route.destination,
   enabled: route.enabled,

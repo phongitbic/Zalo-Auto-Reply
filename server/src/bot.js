@@ -514,13 +514,13 @@ export class ZaloReplyBot {
           ...decisionBase,
           accepted: false,
           reason: result.reason,
-          matchedRoute: result.route ? `${result.route.origin} → ${result.route.destination}` : null,
+          matchedRoute: result.route?.title ?? null,
           timings: { normalizationMs, routeMatchMs },
         });
         return;
       }
       acceptedReason = result.reason;
-      matchedRoute = `${result.route.origin} → ${result.route.destination}`;
+      matchedRoute = result.route.title;
     }
 
     const orderDedupeKey = getOrderDedupeKey(decisionBase.senderId, incomingText);

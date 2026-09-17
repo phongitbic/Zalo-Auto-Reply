@@ -220,6 +220,7 @@ test("Bun/Elysia preserves the HTTP and Socket.IO contracts", { skip: !isBun }, 
     const created = await request("/api/settings/priority-routes", {
       method: "POST",
       body: JSON.stringify({
+        title: "Hải Phòng → Quảng Ninh",
         origin: "Hải Phòng, Cát Bi",
         destination: "Quảng Ninh, Hạ Long",
         prices: ["200k"],
@@ -230,6 +231,7 @@ test("Bun/Elysia preserves the HTTP and Socket.IO contracts", { skip: !isBun }, 
     const createdBody = await created.json();
     const createdRoute = createdBody.priorityRoutes.find((route) => route.origin === "Hải Phòng, Cát Bi");
     assert.ok(createdRoute?.id);
+    assert.equal(createdRoute.title, "Hải Phòng → Quảng Ninh");
     assert.equal(createdRoute.destination, "Quảng Ninh, Hạ Long");
     assert.deepEqual(createdRoute.prices, ["200k"]);
     assert.deepEqual(createdRoute.excludedKeywords, ["chó", "mèo"]);

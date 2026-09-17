@@ -27,6 +27,7 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
         const val ACTION_CONNECT = "vn.zalo.autoreply.CONNECT"
         const val ACTION_START = "vn.zalo.autoreply.START"
         const val ACTION_STOP = "vn.zalo.autoreply.STOP"
+        const val ACTION_REFRESH_OVERLAY = "vn.zalo.autoreply.REFRESH_OVERLAY"
         private const val FOREGROUND_CHANNEL = "bot_service"
         private const val FOREGROUND_ID = 4101
     }
@@ -41,6 +42,7 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
     private var lastBotStatus: JSONObject? = null
     private var activeServerUrl: String? = null
     private var activeToken: String? = null
+    private lateinit var overlay: OverlayController
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -48,6 +50,7 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
         }
 
         override fun onLost(network: Network) {
+            overlay.setConnected(false)
             updateForeground("Mất mạng, đang chờ kết nối lại")
             publishConnection("disconnected")
         }
@@ -59,6 +62,12 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
         secretStore = SecretStore(this)
         connectivity = getSystemService(ConnectivityManager::class.java)
         textToSpeech = TextToSpeech(this, this)
+        overlay = OverlayController(
+            this,
+            preferences,
+            onControl = { action -> sendControl(action) },
+            onComplete = { completeOrder() },
+        )
         createForegroundChannel()
         startForeground(FOREGROUND_ID, foregroundNotification("Đang kết nối máy chủ"))
         try {
@@ -72,6 +81,7 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
             ACTION_CONNECT -> reconnectSocket()
             ACTION_START -> sendControl("start")
             ACTION_STOP -> sendControl("stop")
+            ACTION_REFRESH_OVERLAY -> overlay.refreshPermission()
             else -> reconnectSocket()
         }
         return START_STICKY
@@ -91,6 +101,7 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
         }
         textToSpeech?.stop()
         textToSpeech?.shutdown()
+        overlay.destroy()
         worker.shutdownNow()
         super.onDestroy()
     }
@@ -130,14 +141,17 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
         }
         socket = IO.socket(URI.create(serverUrl), options).apply {
             on(Socket.EVENT_CONNECT) {
+                overlay.setConnected(true)
                 updateForeground("Bot nhận đơn đang hoạt động")
                 publishConnection("connected")
             }
             on(Socket.EVENT_DISCONNECT) {
+                overlay.setConnected(false)
                 updateForeground("Đang kết nối lại máy chủ")
                 publishConnection("disconnected")
             }
             on(Socket.EVENT_CONNECT_ERROR) { args ->
+                overlay.setConnected(false)
                 updateForeground("Không thể kết nối máy chủ")
                 publishConnection("error", args.firstOrNull()?.toString())
             }
@@ -195,6 +209,7 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
         val redisConnected = redis?.optBoolean("connected") == true
         val subscriberConnected = redis?.optBoolean("subscriberConnected", true) != false
         preferences.edit().putString("mode", mode).apply()
+        overlay.render(status, socket?.connected() == true)
         val modeLabel = if (!enabled) "Đã dừng nhận đơn"
             else if (mode == "priority") "Đang nhận cuốc ưu tiên"
             else "Đang nhận tất cả"
@@ -207,6 +222,7 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun handleOrder(order: JSONObject, sound: Boolean, vibrate: Boolean, speech: Boolean) {
+        overlay.showAcceptedOrder(order)
         if (!OrderNotifier.show(this, order, sound, vibrate)) return
         if (speech && ttsReady) {
             textToSpeech?.speak("Đã nhận đơn thành công", TextToSpeech.QUEUE_FLUSH, null, order.optString("eventId"))
@@ -215,28 +231,58 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
 
     fun sendControl(action: String, mode: String = preferences.getString("mode", "all") ?: "all") {
         preferences.edit().putString("mode", mode).apply()
-        val serverUrl = ServerUrlPolicy.normalize(preferences.getString("server_url", null)) ?: return
-        val token = secretStore.getToken() ?: return
+        overlay.setBusy(true)
         worker.execute {
             try {
-                val connection = URL("$serverUrl/api/bot/control").openConnection() as HttpURLConnection
-                connection.requestMethod = "POST"
-                connection.connectTimeout = 10000
-                connection.readTimeout = 10000
-                connection.doOutput = true
-                connection.setRequestProperty("Authorization", "Bearer $token")
-                connection.setRequestProperty("Content-Type", "application/json")
-                connection.outputStream.use { output ->
-                    output.write(JSONObject(mapOf("action" to action, "mode" to mode)).toString().toByteArray())
-                }
-                val succeeded = connection.responseCode in 200..299
-                connection.disconnect()
+                val succeeded = postJson(
+                    "/api/bot/control",
+                    JSONObject(mapOf("action" to action, "mode" to mode)),
+                )
                 updateForeground(if (succeeded) {
                     if (action == "start") "Bot nhận đơn đang hoạt động" else "Đã dừng nhận đơn"
                 } else "Máy chủ từ chối thao tác")
+                if (!succeeded) overlay.showError("Máy chủ từ chối thao tác")
             } catch (_: Exception) {
                 updateForeground("Mất kết nối máy chủ")
+                overlay.showError("Mất kết nối máy chủ")
+            } finally {
+                overlay.setBusy(false)
             }
+        }
+    }
+
+    private fun completeOrder() {
+        overlay.setBusy(true)
+        worker.execute {
+            try {
+                if (!postJson("/api/orders/current/complete", JSONObject())) {
+                    overlay.showError("Không thể xác nhận đơn")
+                }
+            } catch (_: Exception) {
+                overlay.showError("Mất kết nối máy chủ")
+            } finally {
+                overlay.setBusy(false)
+            }
+        }
+    }
+
+    private fun postJson(path: String, payload: JSONObject): Boolean {
+        val serverUrl = ServerUrlPolicy.normalize(preferences.getString("server_url", null)) ?: return false
+        val token = secretStore.getToken() ?: return false
+        val body = payload.toString().toByteArray()
+        val connection = URL("$serverUrl$path").openConnection() as HttpURLConnection
+        return try {
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+            connection.doOutput = true
+            connection.setFixedLengthStreamingMode(body.size)
+            connection.setRequestProperty("Authorization", "Bearer $token")
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.outputStream.use { it.write(body) }
+            connection.responseCode in 200..299
+        } finally {
+            connection.disconnect()
         }
     }
 

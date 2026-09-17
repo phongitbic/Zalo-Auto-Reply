@@ -86,9 +86,15 @@ input:focus, textarea:focus, select:focus { border-color: #4d86ff; box-shadow: 0
 .disabled-toggle { background: #42546a; }
 .form-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .field-help { display: block; margin: -4px 0 10px; color: #8fa6bf; line-height: 1.4; }
+.field-help.limit-error { color: #fb7185; font-weight: 800; }
 .route-title { min-width: min(390px, 100%); flex: 1; }
 .route-title > strong { display: block; font-size: 17px; }
 .route-title > strong span { display: inline; color: #5790ff; font-size: inherit; }
+.route-detail { width: 100%; max-height: 300px; overflow: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 13px; border: 1px solid #263d58; border-radius: 12px; background: #071422; }
+.route-detail div { min-width: 0; }
+.route-detail strong { font-size: 12px; }
+.route-detail p { margin: 5px 0 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.45; }
+.route-detail > small { grid-column: 1 / -1; }
 .route-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
 .route-actions label { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .route-actions label span { margin: 0; }
@@ -143,18 +149,7 @@ code { color: #8eb6ff; overflow-wrap: anywhere; }
 .token-toggle { position: absolute; top: 50%; right: 8px; min-width: 50px; padding: 8px 10px; transform: translateY(-50%); border: 0; border-radius: 9px; color: #8eb6ff; background: transparent; font-size: 12px; font-weight: 800; }
 .token-toggle:hover, .token-toggle:focus-visible { color: #fff; background: #245ad633; outline: none; }
 .connect-card button.large { min-height: 58px; margin-top: 6px; font-size: 17px; }
-.native-app { padding-bottom: 140px; }
-.android-fab { position: fixed; z-index: 15; right: max(18px, env(safe-area-inset-right)); bottom: max(20px, env(safe-area-inset-bottom)); width: 64px; height: 64px; display: grid; place-items: center; padding: 0; border: 1px solid #ffffff42; border-radius: 50%; color: #fff; box-shadow: 0 14px 34px #02091588, inset 0 1px #ffffff33; transition: transform .16s ease, box-shadow .16s ease; }
-.android-fab.start { background: linear-gradient(145deg, #10b981, #047857); }
-.android-fab.stop { background: linear-gradient(145deg, #fb4267, #be123c); }
-.android-fab.complete { background: linear-gradient(145deg, #3478f6, #2456db); }
-.android-fab:not(:disabled):active { transform: scale(.93); box-shadow: 0 8px 20px #02091588; }
-.android-fab svg { width: 29px; height: 29px; fill: currentColor; }
-.android-fab.complete svg path { fill: none; stroke: currentColor; stroke-width: 2.8; stroke-linecap: round; stroke-linejoin: round; }
-.fab-spinner { width: 26px; height: 26px; border: 3px solid #ffffff66; border-top-color: #fff; border-radius: 50%; animation: fab-spin .75s linear infinite; }
-.native-app .notice { bottom: 104px; }
-@keyframes fab-spin { to { transform: rotate(360deg); } }
-.notice { position: fixed; z-index: 10; right: 22px; bottom: 22px; max-width: min(440px, calc(100% - 44px)); padding: 14px 18px; border: 1px solid #46627f; border-radius: 13px; color: #fff; background: #19304a; box-shadow: 0 18px 45px #000a; text-align: left; }
+.notice { position: fixed; z-index: 40; right: 22px; bottom: 22px; max-width: min(440px, calc(100% - 44px)); padding: 14px 18px; border: 1px solid #46627f; border-radius: 13px; color: #fff; background: #19304a; box-shadow: 0 18px 45px #000a; text-align: left; }
 .notice.inline { position: static; max-width: none; }
 .zalo-login-status { padding: 7px 10px; border-radius: 999px; color: #fbbf24; background: #713f123d; font-size: 12px; font-weight: 800; }
 .zalo-login-status.online { color: #34d399; background: #064e3b66; }
@@ -192,6 +187,7 @@ code { color: #8eb6ff; overflow-wrap: anywhere; }
   .preview-summary { background: #f1f6fc; }
   .preview-summary strong, .preview-summary span { color: #273c58; }
   .group-select-all, .group-row { border-color: #d6e1ee; background: #f8fbff; }
+  .route-detail { border-color: #d6e1ee; background: #fff; }
   .order-detail div { border-color: #d6e1ee; background: #f8fbff; }
   .token-toggle { color: #2d62c8; }
   .token-toggle:hover, .token-toggle:focus-visible { color: #153c8f; background: #dce9ff; }
@@ -210,6 +206,8 @@ code { color: #8eb6ff; overflow-wrap: anywhere; }
   .route-toolbar input[type="search"] { grid-column: 1 / -1; }
   .route-card { align-items: flex-start; }
   .route-actions { width: 100%; justify-content: flex-start; }
+  .route-detail { grid-template-columns: 1fr; }
+  .route-detail > small { grid-column: auto; }
   .system-health { grid-template-columns: 1fr; }
   .order-detail { grid-template-columns: 1fr; }
   .order-detail div:first-child { grid-column: auto; }

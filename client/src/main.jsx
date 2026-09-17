@@ -13,6 +13,7 @@ const storage = {
 };
 const emptyRoute = () => ({
   id: null,
+  title: "",
   origin: "",
   destination: "",
   prices: "",
@@ -20,6 +21,14 @@ const emptyRoute = () => ({
   enabled: true,
 });
 const formatTime = (value) => value ? new Date(value).toLocaleString("vi-VN") : "--";
+const splitListItems = (value) => String(value ?? "")
+    .split(/[,;\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+const countListItems = (value) => new Set(
+  splitListItems(value).map((item) => item.toLocaleLowerCase("vi"))
+).size;
+const routeDisplayTitle = (route) => route.title || `${splitListItems(route.origin)[0] || "Điểm đi"} → ${splitListItems(route.destination)[0] || "Điểm đến"}`;
 const modeText = (status) => !status?.enabled
   ? "Đã dừng nhận đơn"
   : status.mode === "priority" ? "Đang nhận cuốc ưu tiên" : "Đang nhận tất cả";
@@ -44,10 +53,11 @@ function App() {
   const [routeDraft, setRouteDraft] = React.useState(null);
   const [importDialog, setImportDialog] = React.useState(null);
   const [notificationSettings, setNotificationSettings] = React.useState(() => {
+    const defaults = { sound: true, vibrate: true, speech: false, overlay: true };
     try {
-      return JSON.parse(storage.get("notificationSettings", "")) || { sound: true, vibrate: true, speech: false };
+      return { ...defaults, ...(JSON.parse(storage.get("notificationSettings", "")) || {}) };
     } catch {
-      return { sound: true, vibrate: true, speech: false };
+      return defaults;
     }
   });
 
@@ -247,10 +257,24 @@ function App() {
     }
   }
 
+  async function setOverlayEnabled(enabled) {
+    setNotificationSettings((value) => ({ ...value, overlay: enabled }));
+    if (!isNative) return;
+    try {
+      const state = await OrderService.setOverlayEnabled({ enabled });
+      if (enabled && !state.granted) {
+        setNotice("Hãy cho phép Zcar hiển thị trên ứng dụng khác, sau đó quay lại ứng dụng");
+      }
+    } catch (error) {
+      setNotice(error.message);
+    }
+  }
+
   async function saveRoute() {
     setBusy(true);
     try {
       const body = {
+        title: routeDraft.title,
         origin: routeDraft.origin,
         destination: routeDraft.destination,
         prices: routeDraft.prices.split(/[,;\n]+/).map((item) => item.trim()).filter(Boolean),
@@ -289,7 +313,7 @@ function App() {
   }
 
   async function deleteRoute(route) {
-    if (!window.confirm(`Xóa tuyến ${route.origin} → ${route.destination}?`)) return;
+    if (!window.confirm(`Xóa tuyến ${routeDisplayTitle(route)}?`)) return;
     setSavingRouteId(route.id);
     try {
       const result = await apiFetch(`/api/settings/priority-routes/${route.id}`, { method: "DELETE" });
@@ -372,7 +396,7 @@ function App() {
   const routes = status?.priorityRoutes || [];
   const query = routeSearch.trim().toLocaleLowerCase("vi");
   const visibleRoutes = routes.filter((route) => {
-    const matchesSearch = !query || `${route.origin} ${route.destination} ${(route.prices || []).join(" ")} ${(route.excludedKeywords || []).join(" ")}`.toLocaleLowerCase("vi").includes(query);
+    const matchesSearch = !query || `${route.title || ""} ${route.origin} ${route.destination} ${(route.prices || []).join(" ")} ${(route.excludedKeywords || []).join(" ")}`.toLocaleLowerCase("vi").includes(query);
     const matchesFilter = routeFilter === "all" || (routeFilter === "enabled" ? route.enabled : !route.enabled);
     return matchesSearch && matchesFilter;
   });
@@ -380,7 +404,7 @@ function App() {
   if (!status) return <ConnectScreen {...{ serverUrl, setServerUrl, adminToken, setAdminToken, connectionState, connect, notice }} />;
 
   return (
-    <main className={isNative ? "native-app" : undefined}>
+    <main>
       <header className="app-header">
         <div>
           <span className={`connection ${connectionState}`}><i />{connectionState === "connected" ? "Máy chủ đã kết nối" : connectionState === "connecting" ? "Đang kết nối máy chủ" : "Mất kết nối máy chủ"}</span>
@@ -420,6 +444,7 @@ function App() {
             {[["sound", "Âm thanh"], ["vibrate", "Rung"], ["speech", "Giọng đọc tiếng Việt"]].map(([key, label]) => (
               <label className="switch-row" key={key}><span>{label}</span><input type="checkbox" checked={notificationSettings[key]} onChange={(event) => setNotificationSettings((value) => ({ ...value, [key]: event.target.checked }))} /></label>
             ))}
+            {isNative && <label className="switch-row"><span>Nút điều khiển nổi ngoài ứng dụng</span><input type="checkbox" checked={notificationSettings.overlay} onChange={(event) => void setOverlayEnabled(event.target.checked)} /></label>}
             {isNative && <button className="secondary" onClick={() => void OrderService.openAppSettings()}>Mở cài đặt pin ứng dụng</button>}
           </section>
         </>
@@ -435,45 +460,11 @@ function App() {
         </section>
       )}
 
-      {isNative && <AndroidFab
-        status={status}
-        busy={busy}
-        connected={connectionState === "connected"}
-        onStart={() => control("start")}
-        onStop={() => control("stop")}
-        onComplete={completeActiveOrder}
-      />}
       {routeDraft && <RouteDialog draft={routeDraft} setDraft={setRouteDraft} busy={busy} onSave={saveRoute} onClose={() => setRouteDraft(null)} />}
       {importDialog && <ImportDialog data={importDialog} busy={busy} onConfirm={confirmImport} onClose={() => setImportDialog(null)} />}
       {notice && <button className="notice" onClick={() => setNotice("")}>{notice}</button>}
     </main>
   );
-}
-
-function AndroidFab({ status, busy, connected, onStart, onStop, onComplete }) {
-  const action = status.activeOrder ? "complete" : status.enabled ? "stop" : "start";
-  const labels = {
-    start: "Bắt đầu nhận đơn",
-    stop: "Dừng nhận đơn",
-    complete: "Đánh dấu đơn đã xử lý",
-  };
-  const activate = action === "complete" ? onComplete : action === "stop" ? onStop : onStart;
-  return <button
-    type="button"
-    className={`android-fab ${action}${busy ? " busy" : ""}`}
-    aria-label={labels[action]}
-    title={labels[action]}
-    disabled={busy || !connected}
-    onClick={() => void activate()}
-  >
-    {busy
-      ? <span className="fab-spinner" aria-hidden="true" />
-      : action === "start"
-        ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.2v13.6L19 12 8 5.2Z" /></svg>
-        : action === "stop"
-          ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.8" /></svg>
-          : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5.2 12.6 4.2 4.2L19 7.2" /></svg>}
-  </button>;
 }
 
 function ConnectScreen({ serverUrl, setServerUrl, adminToken, setAdminToken, connectionState, connect, notice }) {
@@ -534,13 +525,45 @@ function RoutesPage({ routes, visibleRoutes, routeSearch, setRouteSearch, routeF
     <div className="section-heading"><div><span className="eyebrow">CÀI ĐẶT</span><h2>Cuốc xe ưu tiên</h2></div><button className="primary" onClick={onAdd}>+ Thêm tuyến mới</button></div>
     <div className="route-toolbar panel"><input type="search" placeholder="Tìm điểm đi, điểm đến, giá tiền hoặc từ khóa" value={routeSearch} onChange={(event) => setRouteSearch(event.target.value)} /><select value={routeFilter} onChange={(event) => setRouteFilter(event.target.value)}><option value="all">Tất cả tuyến</option><option value="enabled">Đang bật</option><option value="disabled">Đang tắt</option></select><label className="file-button">Tải file TXT<input type="file" accept=".txt,text/plain" disabled={savingRouteId === "all"} onChange={(event) => { void onFile(event.target.files?.[0]); event.target.value = ""; }} /></label><button className="secondary" onClick={() => void onBackup()}>Tải xuống bản sao</button></div>
     <label className="bulk-switch panel"><span><strong>Bật/tắt tất cả tuyến</strong><small>{routes.length} tuyến trong cấu hình</small></span><input type="checkbox" checked={allEnabled} disabled={!routes.length || savingRouteId === "all"} onChange={(event) => void onToggleAll(event.target.checked)} /></label>
-    <div className="route-list">{visibleRoutes.length === 0 ? <p className="empty">Không có tuyến phù hợp.</p> : visibleRoutes.map((route) => <article className={`route-card ${route.enabled ? "enabled" : "disabled"}`} key={route.id}><div className="route-title"><strong>{route.origin} <span>→</span> {route.destination}</strong><small>Chỉ nhận đúng chiều · Cập nhật {formatTime(route.updatedAt)}</small>{(route.prices || []).length > 0 && <small>Giá nhận: {route.prices.join(", ")}</small>}{(route.excludedKeywords || []).length > 0 && <small>Từ khóa bị loại: {route.excludedKeywords.join(", ")}</small>}{route.sourceFile && <small>Nguồn: {route.sourceFile} · tải lên {formatTime(route.uploadedAt)} · {route.importRouteCount} tuyến hợp lệ</small>}</div><div className="route-actions"><label><span>{route.enabled ? "Đang bật" : "Đang tắt"}</span><input type="checkbox" checked={route.enabled} disabled={savingRouteId === route.id} onChange={(event) => void onUpdate(route, { enabled: event.target.checked })} /></label><button className="secondary compact" onClick={() => onEdit(route)}>Sửa</button><button className="danger compact" onClick={() => void onDelete(route)}>Xóa</button></div>{savingRouteId === route.id && <span className="saving">Đang lưu trên máy chủ…</span>}</article>)}</div>
+    <div className="route-list">{visibleRoutes.length === 0 ? <p className="empty">Không có tuyến phù hợp.</p> : visibleRoutes.map((route) => <RouteCard key={route.id} {...{ route, savingRouteId, onEdit, onUpdate, onDelete }} />)}</div>
   </section>;
+}
+
+function RouteCard({ route, savingRouteId, onEdit, onUpdate, onDelete }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const originCount = countListItems(route.origin);
+  const destinationCount = countListItems(route.destination);
+  const priceCount = (route.prices || []).length;
+  const excludedCount = (route.excludedKeywords || []).length;
+  return <article className={`route-card ${route.enabled ? "enabled" : "disabled"}`}>
+    <div className="route-title">
+      <strong>{routeDisplayTitle(route)}</strong>
+      <small>{originCount} điểm đi · {destinationCount} điểm đến · {priceCount} mức giá · {excludedCount} từ khóa loại</small>
+      <small>Chỉ nhận đúng chiều · Cập nhật {formatTime(route.updatedAt)}</small>
+    </div>
+    <div className="route-actions">
+      <label><span>{route.enabled ? "Đang bật" : "Đang tắt"}</span><input type="checkbox" checked={route.enabled} disabled={savingRouteId === route.id} onChange={(event) => void onUpdate(route, { enabled: event.target.checked })} /></label>
+      <button className="secondary compact" onClick={() => setExpanded((value) => !value)}>{expanded ? "Thu gọn" : "Chi tiết"}</button>
+      <button className="secondary compact" onClick={() => onEdit(route)}>Sửa</button>
+      <button className="danger compact" onClick={() => void onDelete(route)}>Xóa</button>
+    </div>
+    {expanded && <div className="route-detail">
+      <div><strong>Điểm đi</strong><p>{route.origin}</p></div>
+      <div><strong>Điểm đến</strong><p>{route.destination}</p></div>
+      {priceCount > 0 && <div><strong>Giá nhận</strong><p>{route.prices.join(", ")}</p></div>}
+      {excludedCount > 0 && <div><strong>Từ khóa bị loại</strong><p>{route.excludedKeywords.join(", ")}</p></div>}
+      {route.sourceFile && <small>Nguồn: {route.sourceFile} · tải lên {formatTime(route.uploadedAt)} · {route.importRouteCount} tuyến hợp lệ</small>}
+    </div>}
+    {savingRouteId === route.id && <span className="saving">Đang lưu trên máy chủ…</span>}
+  </article>;
 }
 
 function RouteDialog({ draft, setDraft, busy, onSave, onClose }) {
   const field = (key) => (event) => setDraft((value) => ({ ...value, [key]: event.target.value }));
-  return <div className="modal-backdrop"><section className="modal"><div className="section-heading"><h2>{draft.id ? "Chỉnh sửa tuyến" : "Thêm tuyến mới"}</h2><button className="icon-button" onClick={onClose}>×</button></div><label>Điểm đi (tối đa 250 địa chỉ)</label><textarea required value={draft.origin} onChange={field("origin")} placeholder="Ví dụ: tpbn, Võ Cường, Thị Cầu, Tiên Du" /><small className="field-help">Ngăn cách từng địa chỉ bằng dấu phẩy hoặc xuống dòng.</small><label>Điểm đến (tối đa 250 địa chỉ)</label><textarea required value={draft.destination} onChange={field("destination")} placeholder="Ví dụ: Hà Đông, Mê Linh, Nguyễn Trãi, Mỹ Đình" /><small className="field-help">Tin nhắn phải khớp một điểm đi và một điểm đến trong tuyến này.</small><label>Giá tiền (không bắt buộc)</label><textarea value={draft.prices} onChange={field("prices")} placeholder="Ví dụ: 200k; có thể nhập nhiều giá, ngăn cách bằng dấu phẩy" /><label>Từ khóa bị loại (không bắt buộc)</label><textarea value={draft.excludedKeywords} onChange={field("excludedKeywords")} placeholder="Ví dụ: chó, mèo" /><label className="switch-row"><span>Bật tuyến ngay</span><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((value) => ({ ...value, enabled: event.target.checked }))} /></label><div className="form-actions"><button className="secondary" onClick={onClose}>Hủy</button><button className="primary" disabled={busy || !draft.origin.trim() || !draft.destination.trim()} onClick={() => void onSave()}>{busy ? "Đang lưu…" : "Lưu trên máy chủ"}</button></div></section></div>;
+  const originCount = countListItems(draft.origin);
+  const destinationCount = countListItems(draft.destination);
+  const overLimit = originCount > 250 || destinationCount > 250;
+  return <div className="modal-backdrop"><section className="modal"><div className="section-heading"><h2>{draft.id ? "Chỉnh sửa tuyến" : "Thêm tuyến mới"}</h2><button className="icon-button" onClick={onClose}>×</button></div><label>Tên tuyến (không bắt buộc)</label><input maxLength="120" value={draft.title || ""} onChange={field("title")} placeholder="Ví dụ: Bắc Ninh → Hà Nội" /><small className="field-help">Để trống sẽ tự lấy địa chỉ đầu tiên của mỗi phía.</small><label>Điểm đi (tối đa 250 địa chỉ)</label><textarea required value={draft.origin} onChange={field("origin")} placeholder="Ví dụ: tpbn, Võ Cường, Thị Cầu, Tiên Du" /><small className={`field-help${originCount > 250 ? " limit-error" : ""}`}>{originCount}/250 địa chỉ · Ngăn cách bằng dấu phẩy hoặc xuống dòng.</small><label>Điểm đến (tối đa 250 địa chỉ)</label><textarea required value={draft.destination} onChange={field("destination")} placeholder="Ví dụ: Hà Đông, Mê Linh, Nguyễn Trãi, Mỹ Đình" /><small className={`field-help${destinationCount > 250 ? " limit-error" : ""}`}>{destinationCount}/250 địa chỉ · Có thể trùng tên với điểm đi; một lần xuất hiện không được tính cho cả hai phía.</small><label>Giá tiền (không bắt buộc)</label><textarea value={draft.prices} onChange={field("prices")} placeholder="Ví dụ: 200k; có thể nhập nhiều giá, ngăn cách bằng dấu phẩy" /><label>Từ khóa bị loại (không bắt buộc)</label><textarea value={draft.excludedKeywords} onChange={field("excludedKeywords")} placeholder="Ví dụ: chó, mèo" /><label className="switch-row"><span>Bật tuyến ngay</span><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((value) => ({ ...value, enabled: event.target.checked }))} /></label><div className="form-actions"><button className="secondary" onClick={onClose}>Hủy</button><button className="primary" disabled={busy || overLimit || !draft.origin.trim() || !draft.destination.trim()} onClick={() => void onSave()}>{busy ? "Đang lưu…" : "Lưu trên máy chủ"}</button></div></section></div>;
 }
 
 function GroupSelector({ apiFetch, status, onStatus, onNotice }) {
