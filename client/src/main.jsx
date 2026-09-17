@@ -28,6 +28,7 @@ function App() {
   const socketRef = React.useRef(null);
   const nativeListenersRef = React.useRef(null);
   const seenEvents = React.useRef(new Set());
+  const shownActiveOrder = React.useRef(null);
   const [serverUrl, setServerUrl] = React.useState(() => storage.get("serverUrl"));
   const [adminToken, setAdminToken] = React.useState(() => isNative ? "" : storage.get("adminToken"));
   const [autoConnectReady, setAutoConnectReady] = React.useState(() => !isNative && Boolean(storage.get("adminToken")));
@@ -204,6 +205,12 @@ function App() {
     storage.set("notificationSettings", JSON.stringify(notificationSettings));
     if (isNative) void OrderService.updateSettings({ settings: notificationSettings }).catch(() => {});
   }, [notificationSettings]);
+  React.useEffect(() => {
+    const eventId = status?.activeOrder?.eventId;
+    if (!eventId || shownActiveOrder.current === eventId) return;
+    shownActiveOrder.current = eventId;
+    setPage("orders");
+  }, [status?.activeOrder?.eventId]);
 
   const showSaved = (result, successText) => {
     setStatus(result);
@@ -220,6 +227,19 @@ function App() {
         body: JSON.stringify({ action, mode }),
       });
       showSaved(result, action === "start" ? "Máy chủ đã bắt đầu nhận đơn" : "Máy chủ đã dừng nhận đơn");
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function completeActiveOrder() {
+    setBusy(true);
+    try {
+      const result = await apiFetch("/api/orders/current/complete", { method: "POST" });
+      showSaved(result, "Đã xử lý đơn và tự động bật nhận đơn");
+      setPage("dashboard");
     } catch (error) {
       setNotice(error.message);
     } finally {
@@ -360,7 +380,7 @@ function App() {
   if (!status) return <ConnectScreen {...{ serverUrl, setServerUrl, adminToken, setAdminToken, connectionState, connect, notice }} />;
 
   return (
-    <main>
+    <main className={isNative ? "native-app" : undefined}>
       <header className="app-header">
         <div>
           <span className={`connection ${connectionState}`}><i />{connectionState === "connected" ? "Máy chủ đã kết nối" : connectionState === "connecting" ? "Đang kết nối máy chủ" : "Mất kết nối máy chủ"}</span>
@@ -373,10 +393,12 @@ function App() {
       <nav className="nav-tabs" aria-label="Điều hướng">
         <button className={page === "dashboard" ? "active" : ""} onClick={() => setPage("dashboard")}>Tổng quan</button>
         <button className={page === "routes" ? "active" : ""} onClick={() => setPage("routes")}>Cuốc ưu tiên</button>
+        <button className={page === "orders" ? "active" : ""} onClick={() => setPage("orders")}>Đơn đã nhận{status.activeOrder ? " •" : ""}</button>
         <button className={page === "settings" ? "active" : ""} onClick={() => setPage("settings")}>Cài đặt</button>
       </nav>
 
       {page === "dashboard" && <Dashboard {...{ status, busy, control }} />}
+      {page === "orders" && <ReceivedOrderPage order={status.activeOrder} busy={busy} onComplete={completeActiveOrder} />}
       {page === "routes" && (
         <RoutesPage
           {...{ routes, visibleRoutes, routeSearch, setRouteSearch, routeFilter, setRouteFilter, savingRouteId }}
@@ -413,11 +435,45 @@ function App() {
         </section>
       )}
 
+      {isNative && <AndroidFab
+        status={status}
+        busy={busy}
+        connected={connectionState === "connected"}
+        onStart={() => control("start")}
+        onStop={() => control("stop")}
+        onComplete={completeActiveOrder}
+      />}
       {routeDraft && <RouteDialog draft={routeDraft} setDraft={setRouteDraft} busy={busy} onSave={saveRoute} onClose={() => setRouteDraft(null)} />}
       {importDialog && <ImportDialog data={importDialog} busy={busy} onConfirm={confirmImport} onClose={() => setImportDialog(null)} />}
       {notice && <button className="notice" onClick={() => setNotice("")}>{notice}</button>}
     </main>
   );
+}
+
+function AndroidFab({ status, busy, connected, onStart, onStop, onComplete }) {
+  const action = status.activeOrder ? "complete" : status.enabled ? "stop" : "start";
+  const labels = {
+    start: "Bắt đầu nhận đơn",
+    stop: "Dừng nhận đơn",
+    complete: "Đánh dấu đơn đã xử lý",
+  };
+  const activate = action === "complete" ? onComplete : action === "stop" ? onStop : onStart;
+  return <button
+    type="button"
+    className={`android-fab ${action}${busy ? " busy" : ""}`}
+    aria-label={labels[action]}
+    title={labels[action]}
+    disabled={busy || !connected}
+    onClick={() => void activate()}
+  >
+    {busy
+      ? <span className="fab-spinner" aria-hidden="true" />
+      : action === "start"
+        ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.2v13.6L19 12 8 5.2Z" /></svg>
+        : action === "stop"
+          ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.8" /></svg>
+          : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5.2 12.6 4.2 4.2L19 7.2" /></svg>}
+  </button>;
 }
 
 function ConnectScreen({ serverUrl, setServerUrl, adminToken, setAdminToken, connectionState, connect, notice }) {
@@ -450,10 +506,26 @@ function Dashboard({ status, busy, control }) {
   return <>
     <section className={`hero-status ${status.enabled ? "running" : "stopped"}`}><span className="eyebrow">TRẠNG THÁI BOT</span><h2>{modeText(status)}</h2><p>{status.mode === "priority" ? "Chỉ phản hồi cuốc khớp tuyến ưu tiên đang bật" : "Phản hồi tất cả tin hợp lệ trong nhóm đã chọn"}</p></section>
     <section className="mode-picker panel"><h3>Chọn chế độ</h3><button className={status.mode === "all" ? "selected" : ""} disabled={busy} onClick={() => void control(status.enabled ? "start" : "stop", "all")}><strong>Nhận tất cả</strong><span>Mọi cuốc xe hợp lệ</span></button><button className={status.mode === "priority" ? "selected" : ""} disabled={busy} onClick={() => void control(status.enabled ? "start" : "stop", "priority")}><strong>Cuốc ưu tiên</strong><span>Chỉ tuyến đang bật</span></button></section>
-    <section className="action-grid"><button className="start large" disabled={busy || status.enabled} onClick={() => void control("start")}>START<br /><small>Bắt đầu nhận đơn</small></button><button className="stop large" disabled={busy || !status.enabled} onClick={() => void control("stop")}>STOP<br /><small>Dừng ngay lập tức</small></button></section>
+    <section className="action-grid"><button className="start large" disabled={busy || status.enabled || Boolean(status.activeOrder)} onClick={() => void control("start")}>START<br /><small>{status.activeOrder ? "Hãy xử lý đơn hiện tại trước" : "Bắt đầu nhận đơn"}</small></button><button className="stop large" disabled={busy || !status.enabled} onClick={() => void control("stop")}>STOP<br /><small>Dừng ngay lập tức</small></button></section>
     <section className="metrics"><article><strong>{stats.sent ?? 0}</strong><span>Đã gửi phiên này</span></article><article><strong>{stats.lastLatencyMs ?? "--"}</strong><span>Tốc độ gần nhất (ms)</span></article><article><strong>{routeStats.enabled}</strong><span>Tuyến đang bật</span></article><article><strong>{routeStats.disabled}</strong><span>Tuyến đang tắt</span></article></section>
     <section className={`system-health panel ${redisReady ? "healthy" : "warning"}`}><div><strong>Redis: {redisLabel}</strong><span>{redis.connected ? `Phiên bản ${redis.version}` : "Bot đang dùng cấu hình gần nhất trong RAM"}</span></div><div><strong>Cập nhật cấu hình</strong><span>{formatTime(status.configUpdatedAt || redis.lastSyncedAt)}</span></div></section>
   </>;
+}
+
+function ReceivedOrderPage({ order, busy, onComplete }) {
+  if (!order) return <section className="empty-order panel"><span className="eyebrow">ĐƠN ĐANG XỬ LÝ</span><h2>Chưa có đơn đã nhận</h2><p>Bot đang sẵn sàng nhận cuốc mới khi trạng thái START được bật.</p></section>;
+  return <section className="received-order panel">
+    <div className="section-heading"><div><span className="eyebrow">ĐƠN ĐÃ NHẬN</span><h2>Đang chờ điều xe</h2></div><span className="order-time">{formatTime(order.sentAt)}</span></div>
+    <article className="order-detail">
+      <div><span>Nội dung</span><strong>{order.originalContent || "--"}</strong></div>
+      <div><span>Người gửi</span><strong>{order.senderName || order.senderId || "--"}</strong></div>
+      <div><span>Nhóm Zalo</span><strong>{order.groupName || order.groupId || "--"}</strong></div>
+      <div><span>Tuyến khớp</span><strong>{order.matchedRoute || "Nhận tất cả"}</strong></div>
+      <div><span>Tổng thời gian</span><strong>{order.totalMs ?? order.latencyMs ?? "--"} ms</strong></div>
+    </article>
+    <p className="order-paused">Bot đã tự động dừng nhận đơn để bạn điều xe.</p>
+    <button className="start large complete-order" disabled={busy} onClick={() => void onComplete()}>{busy ? "Đang cập nhật…" : "Đã xử lý · Bật nhận đơn lại"}</button>
+  </section>;
 }
 
 function RoutesPage({ routes, visibleRoutes, routeSearch, setRouteSearch, routeFilter, setRouteFilter, savingRouteId, onAdd, onEdit, onUpdate, onDelete, onToggleAll, onFile, onBackup }) {
@@ -468,7 +540,7 @@ function RoutesPage({ routes, visibleRoutes, routeSearch, setRouteSearch, routeF
 
 function RouteDialog({ draft, setDraft, busy, onSave, onClose }) {
   const field = (key) => (event) => setDraft((value) => ({ ...value, [key]: event.target.value }));
-  return <div className="modal-backdrop"><section className="modal"><div className="section-heading"><h2>{draft.id ? "Chỉnh sửa tuyến" : "Thêm tuyến mới"}</h2><button className="icon-button" onClick={onClose}>×</button></div><label>Điểm đi</label><input required value={draft.origin} onChange={field("origin")} placeholder="Ví dụ: Bắc Ninh" /><label>Điểm đến</label><input required value={draft.destination} onChange={field("destination")} placeholder="Ví dụ: Hà Nội" /><label>Giá tiền (không bắt buộc)</label><textarea value={draft.prices} onChange={field("prices")} placeholder="Ví dụ: 200k; có thể nhập nhiều giá, ngăn cách bằng dấu phẩy" /><label>Từ khóa bị loại (không bắt buộc)</label><textarea value={draft.excludedKeywords} onChange={field("excludedKeywords")} placeholder="Ví dụ: chó, mèo" /><label className="switch-row"><span>Bật tuyến ngay</span><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((value) => ({ ...value, enabled: event.target.checked }))} /></label><div className="form-actions"><button className="secondary" onClick={onClose}>Hủy</button><button className="primary" disabled={busy || !draft.origin.trim() || !draft.destination.trim()} onClick={() => void onSave()}>{busy ? "Đang lưu…" : "Lưu trên máy chủ"}</button></div></section></div>;
+  return <div className="modal-backdrop"><section className="modal"><div className="section-heading"><h2>{draft.id ? "Chỉnh sửa tuyến" : "Thêm tuyến mới"}</h2><button className="icon-button" onClick={onClose}>×</button></div><label>Điểm đi (tối đa 250 địa chỉ)</label><textarea required value={draft.origin} onChange={field("origin")} placeholder="Ví dụ: tpbn, Võ Cường, Thị Cầu, Tiên Du" /><small className="field-help">Ngăn cách từng địa chỉ bằng dấu phẩy hoặc xuống dòng.</small><label>Điểm đến (tối đa 250 địa chỉ)</label><textarea required value={draft.destination} onChange={field("destination")} placeholder="Ví dụ: Hà Đông, Mê Linh, Nguyễn Trãi, Mỹ Đình" /><small className="field-help">Tin nhắn phải khớp một điểm đi và một điểm đến trong tuyến này.</small><label>Giá tiền (không bắt buộc)</label><textarea value={draft.prices} onChange={field("prices")} placeholder="Ví dụ: 200k; có thể nhập nhiều giá, ngăn cách bằng dấu phẩy" /><label>Từ khóa bị loại (không bắt buộc)</label><textarea value={draft.excludedKeywords} onChange={field("excludedKeywords")} placeholder="Ví dụ: chó, mèo" /><label className="switch-row"><span>Bật tuyến ngay</span><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((value) => ({ ...value, enabled: event.target.checked }))} /></label><div className="form-actions"><button className="secondary" onClick={onClose}>Hủy</button><button className="primary" disabled={busy || !draft.origin.trim() || !draft.destination.trim()} onClick={() => void onSave()}>{busy ? "Đang lưu…" : "Lưu trên máy chủ"}</button></div></section></div>;
 }
 
 function GroupSelector({ apiFetch, status, onStatus, onNotice }) {

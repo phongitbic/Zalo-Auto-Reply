@@ -28,7 +28,7 @@ strong { color: #f8fbff; }
 .connection.error i, .connection.disconnected i { background: #fb7185; }
 .icon-button { width: 44px; height: 44px; border: 1px solid #29415e; border-radius: 14px; color: #fff; background: #12233a; font-size: 20px; }
 
-.nav-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 18px; padding: 6px; border: 1px solid #203752; border-radius: 16px; background: #0b192a; }
+.nav-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 18px; padding: 6px; border: 1px solid #203752; border-radius: 16px; background: #0b192a; }
 .nav-tabs button { padding: 11px 8px; border: 0; border-radius: 11px; color: #91a6c0; background: transparent; font-weight: 700; }
 .nav-tabs button.active { color: #fff; background: #245ad6; box-shadow: 0 8px 22px #12388488; }
 
@@ -85,6 +85,7 @@ input:focus, textarea:focus, select:focus { border-color: #4d86ff; box-shadow: 0
 .enabled-toggle { background: #11966f; }
 .disabled-toggle { background: #42546a; }
 .form-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.field-help { display: block; margin: -4px 0 10px; color: #8fa6bf; line-height: 1.4; }
 .route-title { min-width: min(390px, 100%); flex: 1; }
 .route-title > strong { display: block; font-size: 17px; }
 .route-title > strong span { display: inline; color: #5790ff; font-size: inherit; }
@@ -105,6 +106,17 @@ button.danger { border: 0; color: #fff; background: #b52649; font-weight: 800; }
 .system-health div { display: grid; gap: 5px; }
 .system-health.healthy { border-left: 4px solid #19bd8c; }
 .system-health.warning { border-left: 4px solid #f59e0b; }
+.empty-order { min-height: 240px; display: flex; flex-direction: column; justify-content: center; text-align: center; }
+.received-order { border-color: #1fae84; }
+.order-time { font-size: 13px; }
+.order-detail { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.order-detail div { min-width: 0; padding: 15px; border: 1px solid #263d58; border-radius: 13px; background: #091727; }
+.order-detail div:first-child { grid-column: 1 / -1; }
+.order-detail span, .order-detail strong { display: block; }
+.order-detail span { margin-bottom: 7px; font-size: 12px; }
+.order-detail strong { overflow-wrap: anywhere; line-height: 1.45; }
+.order-paused { margin: 15px 0; padding: 13px 15px; border-radius: 12px; color: #65ddb9; background: #064e3b55; }
+.complete-order { width: 100%; border: 0; color: #fff; font-weight: 900; }
 .empty { padding: 24px; text-align: center; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 14px; overflow: auto; background: #020713cc; backdrop-filter: blur(5px); }
 .modal { width: min(590px, 100%); max-height: calc(100vh - 28px); overflow: auto; display: grid; gap: 11px; margin: auto; padding: 22px; border: 1px solid #2d4768; border-radius: 20px; background: #0d1c2f; box-shadow: 0 25px 80px #000b; }
@@ -131,6 +143,17 @@ code { color: #8eb6ff; overflow-wrap: anywhere; }
 .token-toggle { position: absolute; top: 50%; right: 8px; min-width: 50px; padding: 8px 10px; transform: translateY(-50%); border: 0; border-radius: 9px; color: #8eb6ff; background: transparent; font-size: 12px; font-weight: 800; }
 .token-toggle:hover, .token-toggle:focus-visible { color: #fff; background: #245ad633; outline: none; }
 .connect-card button.large { min-height: 58px; margin-top: 6px; font-size: 17px; }
+.native-app { padding-bottom: 140px; }
+.android-fab { position: fixed; z-index: 15; right: max(18px, env(safe-area-inset-right)); bottom: max(20px, env(safe-area-inset-bottom)); width: 64px; height: 64px; display: grid; place-items: center; padding: 0; border: 1px solid #ffffff42; border-radius: 50%; color: #fff; box-shadow: 0 14px 34px #02091588, inset 0 1px #ffffff33; transition: transform .16s ease, box-shadow .16s ease; }
+.android-fab.start { background: linear-gradient(145deg, #10b981, #047857); }
+.android-fab.stop { background: linear-gradient(145deg, #fb4267, #be123c); }
+.android-fab.complete { background: linear-gradient(145deg, #3478f6, #2456db); }
+.android-fab:not(:disabled):active { transform: scale(.93); box-shadow: 0 8px 20px #02091588; }
+.android-fab svg { width: 29px; height: 29px; fill: currentColor; }
+.android-fab.complete svg path { fill: none; stroke: currentColor; stroke-width: 2.8; stroke-linecap: round; stroke-linejoin: round; }
+.fab-spinner { width: 26px; height: 26px; border: 3px solid #ffffff66; border-top-color: #fff; border-radius: 50%; animation: fab-spin .75s linear infinite; }
+.native-app .notice { bottom: 104px; }
+@keyframes fab-spin { to { transform: rotate(360deg); } }
 .notice { position: fixed; z-index: 10; right: 22px; bottom: 22px; max-width: min(440px, calc(100% - 44px)); padding: 14px 18px; border: 1px solid #46627f; border-radius: 13px; color: #fff; background: #19304a; box-shadow: 0 18px 45px #000a; text-align: left; }
 .notice.inline { position: static; max-width: none; }
 .zalo-login-status { padding: 7px 10px; border-radius: 999px; color: #fbbf24; background: #713f123d; font-size: 12px; font-weight: 800; }
@@ -165,9 +188,11 @@ code { color: #8eb6ff; overflow-wrap: anywhere; }
   .hero-status.stopped { background: #fff; }
   .icon-button { border-color: #d1deec; color: #1e3a5f; background: white; }
   .modal { border-color: #d4e0ee; background: #fff; }
+  .field-help { color: #5f748d; }
   .preview-summary { background: #f1f6fc; }
   .preview-summary strong, .preview-summary span { color: #273c58; }
   .group-select-all, .group-row { border-color: #d6e1ee; background: #f8fbff; }
+  .order-detail div { border-color: #d6e1ee; background: #f8fbff; }
   .token-toggle { color: #2d62c8; }
   .token-toggle:hover, .token-toggle:focus-visible { color: #153c8f; background: #dce9ff; }
 }
@@ -186,6 +211,8 @@ code { color: #8eb6ff; overflow-wrap: anywhere; }
   .route-card { align-items: flex-start; }
   .route-actions { width: 100%; justify-content: flex-start; }
   .system-health { grid-template-columns: 1fr; }
+  .order-detail { grid-template-columns: 1fr; }
+  .order-detail div:first-child { grid-column: auto; }
   .group-toolbar button { flex: 1 1 210px; }
 }
 

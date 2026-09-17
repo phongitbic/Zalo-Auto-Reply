@@ -8,8 +8,8 @@ const warmupCount = 1000;
 const sampleCount = 5000;
 const routes = Array.from({ length: routeCount }, (_, index) => createPriorityRoute({
   id: `route-${index}`,
-  origin: `Diem di ${index}`,
-  destination: `Diem den ${index}`,
+  origin: `Diem di ${index}, Diem di phu ${index}`,
+  destination: `Diem den ${index}, Diem den phu ${index}`,
 }));
 const bot = new ZaloReplyBot({
   allowedGroupIds: new Set(["benchmark-group"]),
@@ -22,6 +22,9 @@ const pendingSend = new Promise(() => {});
 bot.api = { sendMessage: () => pendingSend };
 
 const dispatch = (messageId) => {
+  bot.orderInFlight = false;
+  bot.activeOrder = null;
+  bot.enabled = true;
   const startedAt = performance.now();
   bot.onMessage({
     threadId: "benchmark-group",
@@ -29,7 +32,7 @@ const dispatch = (messageId) => {
     isSelf: false,
     data: {
       msgId: messageId,
-      content: `Diem di 4999 den Diem den 4999 ${messageId}`,
+      content: `Diem di phu 4999 den Diem den phu 4999 ${messageId}`,
       uidFrom: "benchmark-user",
       dName: "Khanh",
     },

@@ -217,6 +217,8 @@ test("emits ORDER_ACCEPTED only after the reply succeeds", async () => {
   assert.equal(accepted.originalContent, "Cầu Giấy 200k");
   assert.equal(accepted.mode, "all");
   assert.equal(accepted.status, "success");
+  assert.equal(bot.snapshot().enabled, false);
+  assert.equal(bot.snapshot().activeOrder.eventId, accepted.eventId);
 });
 
 test("deduplicates recently accepted messages restored after a restart", () => {
@@ -527,6 +529,8 @@ test("ALL mode bypasses priority route status and accepts both mandatory trips",
   });
   bot.api = { sendMessage: () => { calls += 1; return Promise.resolve(); } };
   bot.onMessage(makeMessage({ data: { msgId: "all-1", content: "Bắc Ninh đi Hà Nội" } }));
+  await flushPromises();
+  bot.setControl({ enabled: true, activeOrder: null });
   bot.onMessage(makeMessage({ data: { msgId: "all-2", content: "Bắc Ninh đi Quảng Ninh" } }));
   await flushPromises();
   assert.equal(calls, 2);
@@ -542,8 +546,8 @@ test("PRIORITY mode accepts only the configured direction of an enabled route", 
     emit: (event, payload) => { if (event === "decision") decisions.push(payload); },
   });
   bot.api = { sendMessage: () => { calls += 1; return Promise.resolve(); } };
-  bot.onMessage(makeMessage({ data: { msgId: "priority-forward", content: "Bắc Ninh đi Hà Nội" } }));
   bot.onMessage(makeMessage({ data: { msgId: "priority-reverse", content: "Hà Nội về Bắc Ninh" } }));
+  bot.onMessage(makeMessage({ data: { msgId: "priority-forward", content: "Bắc Ninh đi Hà Nội" } }));
   await flushPromises();
   assert.equal(calls, 1);
   assert.equal(decisions.filter((item) => item.reason === "ACCEPTED_PRIORITY").length, 1);
@@ -594,6 +598,7 @@ test("PRIORITY mode responds immediately to enabled changes without a restart", 
   await flushPromises();
   assert.equal(calls, 1);
   assert.equal(decisions.at(-1).reason, "ACCEPTED_PRIORITY");
+  bot.setControl({ enabled: true, activeOrder: null });
   bot.setPriorityRoutes(mandatoryRoutes());
   bot.onMessage(makeMessage({ data: { msgId: "disabled-again", content: "Bắc Ninh đi Quảng Ninh" } }));
   assert.equal(decisions.at(-1).reason, "IGNORED_ROUTE_DISABLED");
@@ -627,7 +632,7 @@ test("a processed message is replied to and announced only once", async () => {
   await flushPromises();
   assert.equal(calls, 1);
   assert.equal(events.filter((item) => item.event === "ORDER_ACCEPTED").length, 1);
-  assert.equal(events.find((item) => item.payload.reason === "IGNORED_DUPLICATE")?.payload.accepted, false);
+  assert.equal(events.find((item) => item.payload.reason === "IGNORED_ORDER_IN_PROGRESS")?.payload.accepted, false);
 });
 
 test("accepts one order when the same sender posts identical content across 80 groups", async () => {
@@ -659,11 +664,11 @@ test("accepts one order when the same sender posts identical content across 80 g
   await flushPromises();
 
   assert.deepEqual(sentTo, ["group-1"]);
-  assert.equal(decisions.filter((item) => item.reason === "IGNORED_DUPLICATE_ORDER").length, 79);
+  assert.equal(decisions.filter((item) => item.reason === "IGNORED_ORDER_IN_PROGRESS").length, 79);
   assert.equal(bot.stats.sent, 1);
 });
 
-test("accepts identical content from different senders", async () => {
+test("keeps only one active order when different senders post simultaneously", async () => {
   let calls = 0;
   const bot = new ZaloReplyBot({
     allowedGroupIds: new Set(["group-1", "group-2"]), replyText: "Ok", sessionFile: "unused",
@@ -680,8 +685,9 @@ test("accepts identical content from different senders", async () => {
   }));
   await flushPromises();
 
-  assert.equal(calls, 2);
-  assert.equal(bot.stats.sent, 2);
+  assert.equal(calls, 1);
+  assert.equal(bot.stats.sent, 1);
+  assert.equal(bot.snapshot().activeOrder.senderId, "sender-1");
 });
 
 test("releases the in-memory dedupe reservation when sending fails", async () => {

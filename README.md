@@ -20,7 +20,9 @@ Ba trạng thái nhận đơn được lưu tại máy chủ:
 
 `ORDER_ACCEPTED` chỉ được phát sau khi lệnh gửi Zalo hoàn tất thành công. Tin đến có từ `Ok`, tin trùng, sai nhóm hoặc không khớp tuyến không tạo thông báo nhận đơn.
 
-Nếu cùng một người gửi cùng nội dung vào nhiều nhóm trong vòng 10 giây, bot chỉ trả lời tin đến đầu tiên. Việc chống trùng này chạy trong RAM; nội dung giống nhau từ hai người gửi khác nhau vẫn được xử lý độc lập.
+Mỗi bot chỉ giữ một đơn đang xử lý. Ngay khi một lệnh gửi đang chờ Zalo xác nhận, các cuốc đến sau bị chặn trong RAM. Khi gửi `Ok` thành công, bot tự chuyển sang `STOPPED`, lưu `activeOrder` vào trạng thái cục bộ và Redis, rồi hiển thị cuốc trong tab **Đơn đã nhận**. Bấm **Đã xử lý · Bật nhận đơn lại** để xóa cuốc hiện tại và tự bật lại đúng chế độ `ALL` hoặc `PRIORITY` trước đó.
+
+Nếu cùng một người gửi cùng nội dung vào nhiều nhóm trong vòng 10 giây, bot chỉ trả lời tin đến đầu tiên. Việc chống trùng này chạy trong RAM. Sau khi bot bắt đầu gửi `Ok` cho một đơn, mọi đơn đến sau — kể cả từ người gửi khác — đều bị bỏ qua cho đến khi đơn hiện tại được đánh dấu **Đã xử lý** và bot tự bật nhận đơn lại.
 
 ## Chạy và kiểm thử local
 
@@ -120,9 +122,9 @@ Bắc Ninh | Quảng Ninh
 Võ Cường, Bắc Ninh | Cầu Giấy, Hà Nội
 ```
 
-Giao diện luôn hiển thị bản xem trước và số dòng lỗi trước khi xác nhận. File có một dòng sai sẽ không thay đổi cấu hình đang chạy. Mỗi tuyến chỉ nhận đúng chiều từ điểm đi tới điểm đến; muốn nhận chiều ngược phải tạo một tuyến riêng. Điểm đi và điểm đến là bắt buộc. Giá tiền và từ khóa bị loại là hai bộ lọc không bắt buộc: nếu khai báo giá, tin nhắn phải chứa ít nhất một giá đã nhập; nếu chứa bất kỳ từ khóa bị loại nào thì bot không trả lời. Có thể nhập nhiều giá hoặc từ khóa, ngăn cách bằng dấu phẩy, dấu chấm phẩy hoặc xuống dòng.
+Giao diện luôn hiển thị bản xem trước và số dòng lỗi trước khi xác nhận. File có một dòng sai sẽ không thay đổi cấu hình đang chạy. Mỗi tuyến chỉ nhận đúng chiều từ điểm đi tới điểm đến; muốn nhận chiều ngược phải tạo một tuyến riêng. Điểm đi và điểm đến là bắt buộc; mỗi phía có thể nhập tối đa 250 địa chỉ, ngăn cách bằng dấu phẩy, dấu chấm phẩy hoặc xuống dòng. Bot chỉ trả lời khi tin nhắn khớp ít nhất một địa chỉ phía đi và ít nhất một địa chỉ phía đến của cùng tuyến. Giá tiền và từ khóa bị loại là hai bộ lọc không bắt buộc: nếu khai báo giá, tin nhắn phải chứa ít nhất một giá đã nhập; nếu chứa bất kỳ từ khóa bị loại nào thì bot không trả lời. Có thể nhập nhiều giá hoặc từ khóa, ngăn cách bằng dấu phẩy, dấu chấm phẩy hoặc xuống dòng.
 
-Bộ lọc chuẩn hóa chữ hoa/thường, dấu tiếng Việt, dấu câu và khoảng trắng một lần trong RAM. File TXT chỉ dùng lúc nhập; không có thao tác đọc file hoặc tải toàn bộ Redis trên đường xử lý từng tin nhắn.
+Bộ lọc chuẩn hóa chữ hoa/thường, dấu tiếng Việt, dấu câu và khoảng trắng một lần trong RAM. Toàn bộ cấu hình tuyến, gồm các điểm đi và điểm đến, được lưu trong Redis để đồng bộ; mỗi tiến trình biên dịch sẵn trie/chỉ mục trong RAM. File TXT và Redis không được đọc trên đường xử lý từng tin nhắn.
 
 ## Chạy production bằng PM2
 
@@ -219,6 +221,7 @@ Tất cả API `/api/*` yêu cầu `Authorization: Bearer <ADMIN_KEY>` hoặc `x
 | POST | `/api/bot/control` | `{ action: "start"|"stop", mode: "all"|"priority" }` |
 | POST | `/api/bot/enabled` | Tương thích client cũ với `{ enabled }` |
 | POST | `/api/bot/priority-only` | Tương thích client cũ với `{ enabled }` |
+| POST | `/api/orders/current/complete` | Đánh dấu đơn hiện tại đã xử lý và tự bật nhận đơn lại |
 | GET | `/api/settings/groups` | Đọc danh sách nhóm đã chọn trên máy chủ |
 | POST | `/api/settings/groups/refresh` | Tải ID và tên tất cả nhóm từ tài khoản Zalo đang đăng nhập |
 | PUT | `/api/settings/groups` | Lưu `{ selectedGroupIds: [...] }`, cho phép danh sách rỗng |
@@ -252,7 +255,7 @@ Các file migration chính:
 
 ## Android
 
-Ứng dụng dùng đúng các quyền phục vụ kết nối mạng, foreground service `remoteMessaging`, thông báo/rung và overlay. Quyền thông báo và overlay được hỏi lúc dùng chức năng tương ứng. Token không nằm trong APK hoặc Android WebView localStorage; người dùng nhập lúc cài đặt và native service mã hóa token bằng Android Keystore.
+Ứng dụng dùng đúng các quyền phục vụ kết nối mạng, foreground service `remoteMessaging` và thông báo/rung. FAB START/STOP/Đã xử lý nằm bên trong ứng dụng, không dùng quyền overlay và không hiển thị đè lên ứng dụng khác. Token không nằm trong APK hoặc Android WebView localStorage; người dùng nhập lúc cài đặt và native service mã hóa token bằng Android Keystore.
 
 ### Debug
 

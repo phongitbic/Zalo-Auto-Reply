@@ -40,6 +40,7 @@ export const createApiRoutes = ({ config, runtime, tokenMatches }) =>
       try {
         return await runtime.persistControl({ enabled: action === "start", mode });
       } catch (error) {
+        if (error.code === "ACTIVE_ORDER") return errorResponse(set, 409, error.message);
         console.error("Saving bot control state failed:", error);
         return errorResponse(set, 500, "Không thể lưu trạng thái bot.");
       }
@@ -47,7 +48,8 @@ export const createApiRoutes = ({ config, runtime, tokenMatches }) =>
     .post("/bot/enabled", async ({ body, set }) => {
       try {
         return await runtime.persistControl({ enabled: Boolean(body.enabled) });
-      } catch {
+      } catch (error) {
+        if (error.code === "ACTIVE_ORDER") return errorResponse(set, 409, error.message);
         return errorResponse(set, 500, "Không thể lưu trạng thái bot.");
       }
     })
@@ -56,6 +58,15 @@ export const createApiRoutes = ({ config, runtime, tokenMatches }) =>
         return await runtime.persistControl({ mode: body.enabled ? "priority" : "all" });
       } catch {
         return errorResponse(set, 500, "Không thể lưu chế độ bot.");
+      }
+    })
+    .post("/orders/current/complete", async ({ set }) => {
+      try {
+        return await runtime.completeActiveOrder();
+      } catch (error) {
+        if (error.code === "ORDER_NOT_FOUND") return errorResponse(set, 404, error.message);
+        console.error("Completing active order failed:", error);
+        return errorResponse(set, 500, "Không thể hoàn tất đơn hiện tại.");
       }
     })
     .get("/settings/groups", () => runtime.getGroupSettings())

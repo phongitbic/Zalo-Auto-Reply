@@ -35,9 +35,10 @@ const safeError = (error, url) => {
   return message;
 };
 
-export const encodeBotState = ({ enabled, mode }, updatedAt = new Date().toISOString()) => ({
+export const encodeBotState = ({ enabled, mode, activeOrder = null }, updatedAt = new Date().toISOString()) => ({
   operationMode: enabled ? (mode === "priority" ? "PRIORITY" : "ALL") : "STOPPED",
   lastActiveMode: mode === "priority" ? "PRIORITY" : "ALL",
+  activeOrder,
   updatedAt,
 });
 
@@ -47,6 +48,7 @@ export const decodeBotState = (value, fallback) => {
   return {
     enabled: value.operationMode !== "STOPPED",
     mode: activeMode === "PRIORITY" ? "priority" : "all",
+    activeOrder: value.activeOrder && typeof value.activeOrder === "object" ? value.activeOrder : null,
     updatedAt: value.updatedAt || null,
   };
 };

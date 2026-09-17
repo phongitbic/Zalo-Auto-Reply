@@ -6,9 +6,15 @@ import { decodeBotState, encodeBotState, RedisCoordinator } from "../src/redis-c
 test("encodes the three official modes and preserves the selected mode while stopped", () => {
   assert.equal(encodeBotState({ enabled: true, mode: "all" }).operationMode, "ALL");
   assert.equal(encodeBotState({ enabled: true, mode: "priority" }).operationMode, "PRIORITY");
-  const stopped = encodeBotState({ enabled: false, mode: "priority" }, "now");
+  const activeOrder = { eventId: "order-1", originalContent: "Bắc Ninh đi Hà Nội" };
+  const stopped = encodeBotState({ enabled: false, mode: "priority", activeOrder }, "now");
   assert.equal(stopped.operationMode, "STOPPED");
-  assert.deepEqual(decodeBotState(stopped, null), { enabled: false, mode: "priority", updatedAt: "now" });
+  assert.deepEqual(decodeBotState(stopped, null), {
+    enabled: false,
+    mode: "priority",
+    activeOrder,
+    updatedAt: "now",
+  });
 });
 
 test("queues local configuration for resync when Redis is unavailable", async () => {
@@ -121,11 +127,27 @@ test("Pub/Sub and config version synchronize a route change to every bot process
   await Promise.all([processOne.start(), processTwo.start()]);
   await waitFor(() => processOne.snapshot().connected && processTwo.snapshot().connected);
 
-  first.routes = [{ id: "route-synced", origin: "Bắc Ninh", destination: "Hà Nội" }];
+  first.routes = [{
+    id: "route-synced",
+    origin: "tpbn, Đáp Cầu",
+    destination: "Mê Linh, Nguyễn Trãi",
+  }];
   const save = await processOne.saveConfiguration(["routes"]);
   assert.equal(save.persisted, true);
   await waitFor(() => second.routes[0]?.id === "route-synced");
+  assert.equal(second.routes[0].origin, "tpbn, Đáp Cầu");
+  assert.equal(second.routes[0].destination, "Mê Linh, Nguyễn Trãi");
   assert.ok(processTwo.snapshot().version >= save.version);
+
+  first.state = {
+    enabled: false,
+    mode: "priority",
+    activeOrder: { eventId: "active-order", originalContent: "tpbn đi Mê Linh" },
+  };
+  const stateSave = await processOne.saveConfiguration(["state"]);
+  await waitFor(() => second.state.activeOrder?.eventId === "active-order");
+  assert.equal(second.state.enabled, false);
+  assert.ok(processTwo.snapshot().version >= stateSave.version);
 
   await Promise.all([processOne.stop(), processTwo.stop()]);
 });

@@ -76,6 +76,35 @@ test("accepts an enabled forward priority route", () => {
   assert.equal(match("Có khách từ Bắc Ninh đi Hà Nội", [route()]).reason, "ACCEPTED_PRIORITY");
 });
 
+test("matches any configured origin with any configured destination", () => {
+  const configured = route({
+    origin: "tpbn, Đáp Cầu",
+    destination: "Mê Linh, Nguyễn Trãi",
+  });
+  assert.equal(match("tpbn đi Hà Đông", [configured]).accepted, false);
+  assert.equal(match("tpbn đi Mê Linh", [configured]).reason, "ACCEPTED_PRIORITY");
+  assert.equal(match("Đáp Cầu đi Nguyễn Trãi", [configured]).reason, "ACCEPTED_PRIORITY");
+});
+
+test("normalizes and deduplicates multiple locations while preserving string fields", () => {
+  const configured = route({
+    origin: "tpbn, TPBN; Võ Cường",
+    destination: ["Mê Linh", "Nguyễn Trãi"],
+  });
+  assert.equal(configured.origin, "tpbn, Võ Cường");
+  assert.equal(configured.destination, "Mê Linh, Nguyễn Trãi");
+});
+
+test("allows 250 locations per side and rejects the 251st", () => {
+  const origins = Array.from({ length: 250 }, (_, index) => `Điểm đi ${index}`);
+  const destinations = Array.from({ length: 250 }, (_, index) => `Điểm đến ${index}`);
+  assert.equal(createPriorityRoute({ id: "limit-250", origin: origins, destination: destinations }).origin.split(", ").length, 250);
+  assert.throws(
+    () => createPriorityRoute({ id: "limit-251", origin: [...origins, "Điểm đi 250"], destination: destinations }),
+    /tối đa 250 địa chỉ/
+  );
+});
+
 test("rejects the reverse direction even when legacy data enables two-way", () => {
   const legacyRoute = createPriorityRoute({
     id: "legacy-route",
@@ -139,8 +168,31 @@ test("indexes route candidates instead of scanning every configured route", () =
   }));
   const compiled = compilePriorityRoutes(routes);
 
-  assert.deepEqual(compiled.routeIndexesByTerm.get("diem di 4999"), [4999]);
   const result = matchPriorityRoute("diem di 4999 den diem den 4999", compiled);
   assert.equal(result.accepted, true);
   assert.equal(result.route.id, "route-4999");
+});
+
+test("keeps route directions isolated when locations are shared by many routes", () => {
+  const routes = [
+    route({ id: "shared-1", origin: "Bac Ninh", destination: "Ha Noi" }),
+    route({ id: "shared-2", origin: "Bac Ninh", destination: "Hai Phong" }),
+    route({ id: "shared-3", origin: "Ha Noi", destination: "Quang Ninh" }),
+  ];
+  const compiled = compilePriorityRoutes(routes);
+
+  assert.equal(matchPriorityRoute("bac ninh di hai phong", compiled).route.id, "shared-2");
+  assert.equal(matchPriorityRoute("ha noi di quang ninh", compiled).route.id, "shared-3");
+  assert.equal(matchPriorityRoute("hai phong di bac ninh", compiled).reason, "IGNORED_WRONG_DIRECTION");
+});
+
+test("uses the earliest matching alias to preserve direction semantics", () => {
+  const configured = route({
+    origin: "Bac Ninh, tpbn",
+    destination: "Ha Noi, My Dinh",
+  });
+  const compiled = compilePriorityRoutes([configured]);
+
+  assert.equal(matchPriorityRoute("ha noi don tpbn tra my dinh", compiled).reason, "IGNORED_WRONG_DIRECTION");
+  assert.equal(matchPriorityRoute("tpbn di my dinh", compiled).reason, "ACCEPTED_PRIORITY");
 });

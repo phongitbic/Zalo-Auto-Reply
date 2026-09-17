@@ -27,18 +27,24 @@ const cleanTerms = (values) => {
 };
 
 export const priorityRouteKey = (route) => {
-  return `${normalizeLocation(route.origin)}\u0000${normalizeLocation(route.destination)}`;
+  const origins = cleanTerms(route.origin).map(normalizeLocation).sort().join("\u0001");
+  const destinations = cleanTerms(route.destination).map(normalizeLocation).sort().join("\u0001");
+  return `${origins}\u0000${destinations}`;
 };
 
 const validateEndpoints = (origin, destination) => {
-  const cleanOrigin = cleanLabel(origin);
-  const cleanDestination = cleanLabel(destination);
-  if (!normalizeLocation(cleanOrigin)) return "Thiếu điểm đi.";
-  if (!normalizeLocation(cleanDestination)) return "Thiếu điểm đến.";
-  if (cleanOrigin.length > 200 || cleanDestination.length > 200) {
-    return "Điểm đi và điểm đến tối đa 200 ký tự.";
+  const origins = cleanTerms(origin);
+  const destinations = cleanTerms(destination);
+  if (origins.length === 0) return "Thiếu điểm đi.";
+  if (destinations.length === 0) return "Thiếu điểm đến.";
+  if (origins.length > 250 || destinations.length > 250) {
+    return "Mỗi phía có tối đa 250 địa chỉ.";
   }
-  if (normalizeLocation(cleanOrigin) === normalizeLocation(cleanDestination)) {
+  if ([...origins, ...destinations].some((value) => value.length > 200)) {
+    return "Mỗi địa chỉ tối đa 200 ký tự.";
+  }
+  const originSet = new Set(origins.map(normalizeLocation));
+  if (destinations.some((value) => originSet.has(normalizeLocation(value)))) {
     return "Điểm đi và điểm đến không được trùng nhau.";
   }
   return null;
@@ -63,8 +69,8 @@ export const createPriorityRoute = ({
     throw error;
   }
 
-  const cleanOrigin = cleanLabel(origin);
-  const cleanDestination = cleanLabel(destination);
+  const cleanOrigin = cleanTerms(origin).join(", ");
+  const cleanDestination = cleanTerms(destination).join(", ");
   return {
     id: String(id),
     origin: cleanOrigin,
@@ -164,91 +170,121 @@ export const compilePriorityRoutes = (routes = []) => {
   const compiledRoutes = routes.map((route, index) => ({
     index,
     route,
-    originTerms: [normalizeLocation(route.origin)],
-    destinationTerms: [normalizeLocation(route.destination)],
-    priceTerms: (route.prices ?? []).map(normalizeLocation).filter(Boolean),
-    excludedTerms: (route.excludedKeywords ?? []).map(normalizeLocation).filter(Boolean),
+    priceNeedles: (route.prices ?? []).map(normalizeLocation).filter(Boolean).map((term) => ` ${term} `),
+    excludedNeedles: (route.excludedKeywords ?? []).map(normalizeLocation).filter(Boolean).map((term) => ` ${term} `),
   }));
-  const locationTerms = new Set();
-  const routeIndexesByTerm = new Map();
-  for (const route of compiledRoutes) {
-    for (const term of new Set([...route.originTerms, ...route.destinationTerms])) {
-      locationTerms.add(term);
-      const routeIndexes = routeIndexesByTerm.get(term) ?? [];
-      routeIndexes.push(route.index);
-      routeIndexesByTerm.set(term, routeIndexes);
+  const entriesByTerm = new Map();
+  const addTerm = (term, routeIndex, side) => {
+    let entry = entriesByTerm.get(term);
+    if (!entry) {
+      entry = { term, originRouteIndexes: [], destinationRouteIndexes: [], seenGeneration: 0 };
+      entriesByTerm.set(term, entry);
+    }
+    entry[side].push(routeIndex);
+  };
+  for (const item of compiledRoutes) {
+    for (const term of cleanTerms(item.route.origin).map(normalizeLocation)) {
+      addTerm(term, item.index, "originRouteIndexes");
+    }
+    for (const term of cleanTerms(item.route.destination).map(normalizeLocation)) {
+      addTerm(term, item.index, "destinationRouteIndexes");
     }
   }
-  const termTrie = { children: new Map(), term: null };
-  for (const term of locationTerms) {
-    const tokens = term.split(" ");
+  const termTrie = { children: new Map(), entry: null };
+  for (const entry of entriesByTerm.values()) {
+    const tokens = entry.term.split(" ");
     let node = termTrie;
     for (const token of tokens) {
       let child = node.children.get(token);
       if (!child) {
-        child = { children: new Map(), term: null };
+        child = { children: new Map(), entry: null };
         node.children.set(token, child);
       }
       node = child;
     }
-    node.term = term;
+    node.entry = entry;
   }
   return {
     routes: compiledRoutes,
-    locationTerms: [...locationTerms],
     termTrie,
-    routeIndexesByTerm,
+    termEntries: [...entriesByTerm.values()],
+    matchGeneration: 0,
+    originSeen: new Uint32Array(compiledRoutes.length),
+    destinationSeen: new Uint32Array(compiledRoutes.length),
+    originPositions: new Uint32Array(compiledRoutes.length),
+    destinationPositions: new Uint32Array(compiledRoutes.length),
+    candidateIndexes: [],
   };
 };
 
-const findTermOccurrences = (normalizedMessage, termTrie) => {
+const nextMatchGeneration = (compiled) => {
+  const generation = (compiled.matchGeneration + 1) >>> 0;
+  if (generation !== 0) {
+    compiled.matchGeneration = generation;
+    return generation;
+  }
+  compiled.originSeen.fill(0);
+  compiled.destinationSeen.fill(0);
+  for (const entry of compiled.termEntries) entry.seenGeneration = 0;
+  compiled.matchGeneration = 1;
+  return 1;
+};
+
+const findRouteCandidates = (normalizedMessage, compiled) => {
   const messageTokens = normalizedMessage.split(" ");
-  const occurrences = new Map();
+  const generation = nextMatchGeneration(compiled);
+  const candidates = compiled.candidateIndexes;
+  candidates.length = 0;
+  let occurrenceCount = 0;
   for (let index = 0; index < messageTokens.length; index += 1) {
-    let node = termTrie;
+    let node = compiled.termTrie;
     for (let cursor = index; cursor < messageTokens.length; cursor += 1) {
       node = node.children.get(messageTokens[cursor]);
       if (!node) break;
-      if (node.term && !occurrences.has(node.term)) occurrences.set(node.term, index);
+      const entry = node.entry;
+      if (!entry || entry.seenGeneration === generation) continue;
+      entry.seenGeneration = generation;
+      occurrenceCount += 1;
+      for (const routeIndex of entry.originRouteIndexes) {
+        if (compiled.originSeen[routeIndex] === generation) continue;
+        compiled.originSeen[routeIndex] = generation;
+        compiled.originPositions[routeIndex] = index;
+        if (compiled.destinationSeen[routeIndex] === generation) candidates.push(routeIndex);
+      }
+      for (const routeIndex of entry.destinationRouteIndexes) {
+        if (compiled.destinationSeen[routeIndex] === generation) continue;
+        compiled.destinationSeen[routeIndex] = generation;
+        compiled.destinationPositions[routeIndex] = index;
+        if (compiled.originSeen[routeIndex] === generation) candidates.push(routeIndex);
+      }
     }
   }
-  return occurrences;
+  if (candidates.length > 1) candidates.sort((left, right) => left - right);
+  return occurrenceCount;
 };
 
-const termIndex = (occurrences, terms) => {
-  let best = -1;
-  for (const term of terms) {
-    const index = occurrences.get(term);
-    if (index !== undefined && (best === -1 || index < best)) best = index;
+const includesAny = (messageWithBoundaries, needles) => {
+  for (const needle of needles) {
+    if (messageWithBoundaries.includes(needle)) return true;
   }
-  return best;
+  return false;
 };
-
-const containsTerm = (normalizedMessage, term) =>
-  normalizedMessage === term ||
-  normalizedMessage.startsWith(`${term} `) ||
-  normalizedMessage.endsWith(` ${term}`) ||
-  normalizedMessage.includes(` ${term} `);
 
 export const matchPriorityRoute = (normalizedMessage, compiled) => {
   if (!normalizedMessage) return { accepted: false, reason: "IGNORED_INVALID_MESSAGE" };
-  const occurrences = findTermOccurrences(normalizedMessage, compiled.termTrie);
-  const candidateIndexes = new Set();
-  for (const term of occurrences.keys()) {
-    for (const routeIndex of compiled.routeIndexesByTerm.get(term) ?? []) {
-      candidateIndexes.add(routeIndex);
-    }
-  }
+  const occurrenceCount = findRouteCandidates(normalizedMessage, compiled);
+  const candidates = compiled.candidateIndexes;
   let disabledMatch = null;
   let wrongDirectionMatch = null;
   let excludedKeywordMatch = null;
   let priceMismatch = null;
+  let messageWithBoundaries = null;
 
-  for (const routeIndex of [...candidateIndexes].sort((left, right) => left - right)) {
+  for (const routeIndex of candidates) {
     const item = compiled.routes[routeIndex];
-    const originIndex = termIndex(occurrences, item.originTerms);
-    const destinationIndex = termIndex(occurrences, item.destinationTerms);
-    if (originIndex === -1 || destinationIndex === -1 || originIndex === destinationIndex) continue;
+    const originIndex = compiled.originPositions[routeIndex];
+    const destinationIndex = compiled.destinationPositions[routeIndex];
+    if (originIndex === destinationIndex) continue;
 
     const forward = originIndex < destinationIndex;
     if (!forward) {
@@ -259,13 +295,19 @@ export const matchPriorityRoute = (normalizedMessage, compiled) => {
       disabledMatch ??= item.route;
       continue;
     }
-    if (item.excludedTerms.some((term) => containsTerm(normalizedMessage, term))) {
-      excludedKeywordMatch ??= item.route;
-      continue;
+    if (item.excludedNeedles.length > 0) {
+      messageWithBoundaries ??= ` ${normalizedMessage} `;
+      if (includesAny(messageWithBoundaries, item.excludedNeedles)) {
+        excludedKeywordMatch ??= item.route;
+        continue;
+      }
     }
-    if (item.priceTerms.length > 0 && !item.priceTerms.some((term) => containsTerm(normalizedMessage, term))) {
-      priceMismatch ??= item.route;
-      continue;
+    if (item.priceNeedles.length > 0) {
+      messageWithBoundaries ??= ` ${normalizedMessage} `;
+      if (!includesAny(messageWithBoundaries, item.priceNeedles)) {
+        priceMismatch ??= item.route;
+        continue;
+      }
     }
     return { accepted: true, reason: "ACCEPTED_PRIORITY", route: item.route };
   }
@@ -285,7 +327,7 @@ export const matchPriorityRoute = (normalizedMessage, compiled) => {
 
   return {
     accepted: false,
-    reason: occurrences.size >= 2 ? "IGNORED_ROUTE_NOT_FOUND" : "IGNORED_INVALID_MESSAGE",
+    reason: occurrenceCount >= 2 ? "IGNORED_ROUTE_NOT_FOUND" : "IGNORED_INVALID_MESSAGE",
   };
 };
 

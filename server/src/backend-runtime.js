@@ -26,6 +26,7 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
     sessionFile: config.sessionFile,
     qrFile: config.qrFile,
     enabled: config.enabled,
+    activeOrder: config.botState.activeOrder ?? null,
     priorityOnly: config.priorityOnly,
     priorityRoutes,
     configUpdatedAt: config.botState.updatedAt ?? null,
@@ -35,6 +36,9 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
     emit: (event, payload) => {
       if (event === "ORDER_ACCEPTED") {
         void redisCoordinator?.recordProcessed(payload.groupId, payload.messageId);
+        void persistAcceptedOrder(payload).catch((error) => {
+          console.error("Saving accepted order failed:", error);
+        });
       }
       if (event === "decision") {
         if (config.hotPathLogging) {
@@ -45,6 +49,16 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
       broadcast(event, payload);
     },
   });
+
+  const persistAcceptedOrder = async (order) => {
+    await stateStore.update((current) => ({
+      ...current,
+      enabled: false,
+      activeOrder: order,
+      updatedAt: order.sentAt || new Date().toISOString(),
+    }));
+    await redisCoordinator.saveConfiguration(["state"]);
+  };
 
   const updatePriorityRoutes = (transform, { publishRedis = true } = {}) => {
     const operation = priorityRoutesMutation.then(async () => {
@@ -68,6 +82,7 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
       const saved = await stateStore.update(() => ({
         enabled: state.enabled,
         mode: state.mode,
+        activeOrder: state.activeOrder ?? null,
         updatedAt: state.updatedAt || new Date().toISOString(),
       }));
       bot.setControl(saved);
@@ -89,9 +104,32 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
   bot.setInfrastructureStatus(redisCoordinator.snapshot());
 
   const persistControl = async ({ enabled, mode }) => {
+    if (enabled === true && bot.activeOrder) {
+      const error = new Error("Hãy đánh dấu đơn hiện tại là đã xử lý trước khi nhận đơn mới.");
+      error.code = "ACTIVE_ORDER";
+      throw error;
+    }
     const state = await stateStore.update((current) => ({
+      ...current,
       enabled: enabled ?? current.enabled,
       mode: mode ?? current.mode,
+      updatedAt: new Date().toISOString(),
+    }));
+    bot.setControl(state);
+    const save = await redisCoordinator.saveConfiguration(["state"]);
+    return { ...bot.snapshot(), save };
+  };
+
+  const completeActiveOrder = async () => {
+    if (!bot.activeOrder) {
+      const error = new Error("Không có đơn đang chờ xử lý.");
+      error.code = "ORDER_NOT_FOUND";
+      throw error;
+    }
+    const state = await stateStore.update((current) => ({
+      ...current,
+      enabled: true,
+      activeOrder: null,
       updatedAt: new Date().toISOString(),
     }));
     bot.setControl(state);
@@ -153,9 +191,10 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
   };
 
   const validateRouteRequest = (body, existing = {}) => {
-    if (String(body.origin ?? existing.origin ?? "").trim().length > 200 ||
-        String(body.destination ?? existing.destination ?? "").trim().length > 200) {
-      const error = new Error("Điểm đi và điểm đến tối đa 200 ký tự.");
+    const origin = body.origin ?? existing.origin;
+    const destination = body.destination ?? existing.destination;
+    if (![origin, destination].every((value) => typeof value === "string" || Array.isArray(value))) {
+      const error = new Error("Điểm đi và điểm đến không hợp lệ.");
       error.code = "INVALID_ROUTE";
       throw error;
     }
@@ -178,8 +217,8 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
     }
     return createPriorityRoute({
       ...existing,
-      origin: body.origin ?? existing.origin,
-      destination: body.destination ?? existing.destination,
+      origin,
+      destination,
       enabled: body.enabled ?? existing.enabled ?? true,
       prices,
       excludedKeywords,
@@ -200,6 +239,7 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
     }),
     updateAllowedGroups,
     persistControl,
+    completeActiveOrder,
     importPreview,
     updatePriorityRoutes,
     validateRouteRequest,

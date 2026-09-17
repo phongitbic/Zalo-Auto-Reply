@@ -86,6 +86,7 @@ export class ZaloReplyBot {
     sessionFile,
     qrFile,
     enabled = true,
+    activeOrder = null,
     priorityOnly = false,
     priorityRoutes = [],
     hotPathLogging = false,
@@ -137,7 +138,9 @@ export class ZaloReplyBot {
     };
     this.emit = emit;
     this.api = null;
-    this.enabled = enabled;
+    this.activeOrder = activeOrder && typeof activeOrder === "object" ? activeOrder : null;
+    this.enabled = Boolean(enabled) && !this.activeOrder;
+    this.orderInFlight = false;
     this.qrAvailable = false;
     this.status = "offline";
     this.stats = {
@@ -167,6 +170,7 @@ export class ZaloReplyBot {
     const priorityRouteStats = getPriorityRouteStats(this.priorityRoutes);
     return {
       enabled: this.enabled,
+      activeOrder: this.activeOrder,
       status: this.status,
       groupsConfigured: this.allowedGroupIds.size,
       replyText: this.replyText,
@@ -470,6 +474,10 @@ export class ZaloReplyBot {
       return;
     }
 
+    if (this.orderInFlight) {
+      this.emit("decision", { ...decisionBase, accepted: false, reason: "IGNORED_ORDER_IN_PROGRESS" });
+      return;
+    }
     const dedupeKey = `${threadId}:${messageId}`;
     if (this.seen.hasOrAdd(dedupeKey)) {
       this.emit("decision", { ...decisionBase, accepted: false, reason: "IGNORED_DUPLICATE" });
@@ -532,10 +540,12 @@ export class ZaloReplyBot {
       decisionBase.senderId,
       this.replyText
     );
+    this.orderInFlight = true;
     const networkStartedAt = performance.now();
 
     // Calling the async function starts request preparation synchronously up to its first await.
     const reportFailure = (error) => {
+      this.orderInFlight = false;
       this.seen.delete(dedupeKey);
       if (orderDedupeKey) this.recentOrders.delete(orderDedupeKey);
       this.stats.failed += 1;
@@ -599,6 +609,11 @@ export class ZaloReplyBot {
           latencyMs,
           status: "success",
         };
+        this.orderInFlight = false;
+        this.activeOrder = order;
+        this.enabled = false;
+        this.configUpdatedAt = order.sentAt;
+        this.publish();
         this.emit("ORDER_ACCEPTED", order);
         this.emit("decision", {
           ...decisionBase,
@@ -617,7 +632,7 @@ export class ZaloReplyBot {
   }
 
   setEnabled(enabled) {
-    this.enabled = Boolean(enabled);
+    this.enabled = Boolean(enabled) && !this.activeOrder;
     this.configUpdatedAt = new Date().toISOString();
     this.publish();
   }
@@ -638,10 +653,12 @@ export class ZaloReplyBot {
   setControl({
     enabled = this.enabled,
     mode = this.priorityOnly ? "priority" : "all",
+    activeOrder = this.activeOrder,
     updatedAt = new Date().toISOString(),
   }) {
     if (!["all", "priority"].includes(mode)) throw new Error("Invalid acceptance mode");
-    this.enabled = Boolean(enabled);
+    this.activeOrder = activeOrder && typeof activeOrder === "object" ? activeOrder : null;
+    this.enabled = Boolean(enabled) && !this.activeOrder;
     this.priorityOnly = mode === "priority";
     this.configUpdatedAt = updatedAt;
     this.publish();

@@ -147,6 +147,41 @@ test("Bun/Elysia preserves the HTTP and Socket.IO contracts", { skip: !isBun }, 
     assert.equal(priority.status, 200);
     assert.equal((await priority.json()).operationMode, "PRIORITY");
 
+    const activeOrder = {
+      eventId: "active-order-1",
+      originalContent: "Bắc Ninh đi Hà Nội 200k",
+      senderName: "Khánh",
+      groupName: "Nhóm tài xế",
+      sentAt: "2026-09-17T00:00:00.000Z",
+    };
+    runtime.bot.setControl({
+      enabled: false,
+      mode: "priority",
+      activeOrder,
+    });
+    runtime.bot.emit("ORDER_ACCEPTED", activeOrder);
+    let persistedActiveOrder = null;
+    for (let attempt = 0; attempt < 50 && !persistedActiveOrder; attempt += 1) {
+      await Bun.sleep(2);
+      persistedActiveOrder = JSON.parse(await fs.readFile(config.botStateFile, "utf8")).activeOrder;
+    }
+    assert.equal(persistedActiveOrder.eventId, "active-order-1");
+    const blockedStart = await request("/api/bot/control", {
+      method: "POST",
+      body: JSON.stringify({ action: "start", mode: "priority" }),
+    });
+    assert.equal(blockedStart.status, 409);
+    const completedOrder = await request("/api/orders/current/complete", { method: "POST" });
+    assert.equal(completedOrder.status, 200);
+    const completedStatus = await completedOrder.json();
+    assert.equal(completedStatus.enabled, true);
+    assert.equal(completedStatus.operationMode, "PRIORITY");
+    assert.equal(completedStatus.activeOrder, null);
+    assert.equal((await request("/api/orders/current/complete", { method: "POST" })).status, 404);
+    const savedState = JSON.parse(await fs.readFile(config.botStateFile, "utf8"));
+    assert.equal(savedState.activeOrder, null);
+    assert.equal(savedState.enabled, true);
+
     const preview = await request("/api/settings/priority-routes/preview", {
       method: "POST",
       body: JSON.stringify({ fileName: "routes.txt", content: "Võ Cường | Cầu Giấy" }),
@@ -185,26 +220,27 @@ test("Bun/Elysia preserves the HTTP and Socket.IO contracts", { skip: !isBun }, 
     const created = await request("/api/settings/priority-routes", {
       method: "POST",
       body: JSON.stringify({
-        origin: "Hải Phòng",
-        destination: "Quảng Ninh",
+        origin: "Hải Phòng, Cát Bi",
+        destination: "Quảng Ninh, Hạ Long",
         prices: ["200k"],
         excludedKeywords: ["chó", "mèo"],
       }),
     });
     assert.equal(created.status, 201);
     const createdBody = await created.json();
-    const createdRoute = createdBody.priorityRoutes.find((route) => route.origin === "Hải Phòng");
+    const createdRoute = createdBody.priorityRoutes.find((route) => route.origin === "Hải Phòng, Cát Bi");
     assert.ok(createdRoute?.id);
+    assert.equal(createdRoute.destination, "Quảng Ninh, Hạ Long");
     assert.deepEqual(createdRoute.prices, ["200k"]);
     assert.deepEqual(createdRoute.excludedKeywords, ["chó", "mèo"]);
     const reverseCreated = await request("/api/settings/priority-routes", {
       method: "POST",
-      body: JSON.stringify({ origin: "Quảng Ninh", destination: "Hải Phòng" }),
+      body: JSON.stringify({ origin: "Quảng Ninh, Hạ Long", destination: "Hải Phòng, Cát Bi" }),
     });
     assert.equal(reverseCreated.status, 201);
     assert.equal((await request("/api/settings/priority-routes", {
       method: "POST",
-      body: JSON.stringify({ origin: "Hải Phòng", destination: "Quảng Ninh" }),
+      body: JSON.stringify({ origin: "Cát Bi, Hải Phòng", destination: "Hạ Long, Quảng Ninh" }),
     })).status, 400);
     assert.equal((await request("/api/settings/priority-routes", {
       method: "POST",
