@@ -131,7 +131,7 @@ button.danger { border: 0; color: #fff; background: #b52649; font-weight: 800; }
 .order-paused { margin: 15px 0; padding: 13px 15px; border-radius: 12px; color: #65ddb9; background: #064e3b55; }
 .complete-order { width: 100%; border: 0; color: #fff; font-weight: 900; }
 .empty { padding: 24px; text-align: center; }
-.modal-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 14px; overflow: auto; background: #020713cc; backdrop-filter: blur(5px); }
+.modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 14px; overflow: auto; background: #020713cc; backdrop-filter: blur(5px); }
 .modal { width: min(590px, 100%); max-height: calc(100vh - 28px); overflow: auto; display: grid; gap: 11px; margin: auto; padding: 22px; border: 1px solid #2d4768; border-radius: 20px; background: #0d1c2f; box-shadow: 0 25px 80px #000b; }
 .modal.wide { width: min(760px, 100%); }
 .modal .section-heading { margin-bottom: 5px; }
@@ -156,7 +156,7 @@ code { color: #8eb6ff; overflow-wrap: anywhere; }
 .token-toggle { position: absolute; top: 50%; right: 8px; min-width: 50px; padding: 8px 10px; transform: translateY(-50%); border: 0; border-radius: 9px; color: #8eb6ff; background: transparent; font-size: 12px; font-weight: 800; }
 .token-toggle:hover, .token-toggle:focus-visible { color: #fff; background: #245ad633; outline: none; }
 .connect-card button.large { min-height: 58px; margin-top: 6px; font-size: 17px; }
-.notice { position: fixed; z-index: 40; right: 22px; bottom: 22px; max-width: min(440px, calc(100% - 44px)); padding: 14px 18px; border: 1px solid #46627f; border-radius: 13px; color: #fff; background: #19304a; box-shadow: 0 18px 45px #000a; text-align: left; }
+.notice { position: fixed; z-index: 60; right: 22px; bottom: 22px; max-width: min(440px, calc(100% - 44px)); padding: 14px 18px; border: 1px solid #46627f; border-radius: 13px; color: #fff; background: #19304a; box-shadow: 0 18px 45px #000a; text-align: left; }
 .notice.inline { position: static; max-width: none; }
 .zalo-login-status { padding: 7px 10px; border-radius: 999px; color: #fbbf24; background: #713f123d; font-size: 12px; font-weight: 800; }
 .zalo-login-status.online { color: #34d399; background: #064e3b66; }
@@ -248,10 +248,10 @@ code { color: #8eb6ff; overflow-wrap: anywhere; }
   .group-toolbar button { flex: 1 1 210px; }
   .group-list { max-height: 52vh; }
   .settings > button { width: 100%; }
-  .modal-backdrop { place-items: end center; padding: max(22px, env(safe-area-inset-top)) 0 0; }
-  .modal, .modal.wide { width: 100%; max-height: calc(100dvh - max(22px, env(safe-area-inset-top))); margin: 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 22px 22px 0 0; }
-  .modal textarea { min-height: 96px; }
-  .modal .form-actions { position: sticky; bottom: calc(-18px - env(safe-area-inset-bottom)); z-index: 1; margin: 2px -16px calc(-18px - env(safe-area-inset-bottom)); padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid #203752; background: var(--modal-surface); }
+  .modal-backdrop { display: block; padding: 0; overflow: hidden; backdrop-filter: none; }
+  .modal, .modal.wide { width: 100%; height: 100vh; height: 100dvh; max-height: none; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch; margin: 0; padding: max(16px, env(safe-area-inset-top)) 16px 0; border: 0; border-radius: 0; }
+  .modal textarea { min-height: 92px; }
+  .modal .form-actions { position: sticky; bottom: 0; z-index: 2; margin: 2px -16px 0; padding: 12px 16px max(12px, env(safe-area-inset-bottom)); border-top: 1px solid #203752; background: var(--modal-surface); box-shadow: 0 -12px 28px #02091525; }
   .notice:not(.inline) { right: 12px; bottom: calc(84px + env(safe-area-inset-bottom)); max-width: calc(100% - 24px); }
 }
 
