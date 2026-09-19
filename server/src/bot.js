@@ -362,6 +362,35 @@ export class ZaloReplyBot {
     this.publish();
   }
 
+  async logout() {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.reconnectAttempts = 0;
+    this.stopKeepAlive();
+    this.stopGroupPreconnect();
+    this.keepAliveInFlight = false;
+
+    const api = this.api;
+    this.api = null;
+    this.groupServiceOrigin = null;
+    try {
+      api?.listener?.stop();
+    } catch (_) { }
+
+    await Promise.all([this.sessionFile, this.qrFile].filter(Boolean).map((filePath) =>
+      fs.unlink(filePath).catch((error) => {
+        if (error.code !== "ENOENT") throw error;
+      })
+    ));
+    this.groupNames.clear();
+    this.qrAvailable = false;
+    this.status = "offline";
+    this.publish();
+
+    void this.start().catch((error) => console.error("Starting QR login after logout failed:", error.message));
+    return this.snapshot();
+  }
+
   async login(zalo) {
     try {
       const credentials = JSON.parse(await fs.readFile(this.sessionFile, "utf8"));

@@ -16,8 +16,9 @@ class MainActivity : BridgeActivity() {
     override fun onResume() {
         super.onResume()
         val preferences = getSharedPreferences(OrderForegroundService.PREFERENCES, Context.MODE_PRIVATE)
-        if (preferences.getBoolean(OverlayController.PREFERENCE_ENABLED, true) &&
-            !preferences.getString("server_url", "").isNullOrBlank() &&
+        val shouldShowOverlay = preferences.getBoolean(OverlayController.PREFERENCE_ENABLED, true) ||
+            preferences.getBoolean(OverlayController.PREFERENCE_MANUAL_REPLY_ENABLED, false)
+        if (shouldShowOverlay &&
             Settings.canDrawOverlays(this)
         ) {
             ContextCompat.startForegroundService(

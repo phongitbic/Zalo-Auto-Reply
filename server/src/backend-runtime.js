@@ -241,6 +241,7 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
     updateAllowedGroups,
     persistControl,
     completeActiveOrder,
+    logoutZalo: () => bot.logout(),
     importPreview,
     updatePriorityRoutes,
     validateRouteRequest,

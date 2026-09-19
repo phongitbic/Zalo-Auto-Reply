@@ -10,6 +10,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import androidx.core.app.NotificationCompat
 import io.socket.client.IO
@@ -67,6 +68,7 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
             preferences,
             onControl = { action -> sendControl(action) },
             onComplete = { completeOrder() },
+            onManualReply = { manualReply() },
         )
         createForegroundChannel()
         startForeground(FOREGROUND_ID, foregroundNotification("Đang kết nối máy chủ"))
@@ -264,6 +266,21 @@ class OrderForegroundService : Service(), TextToSpeech.OnInitListener {
                 overlay.setBusy(false)
             }
         }
+    }
+
+    private fun manualReply() {
+        overlay.setManualBusy(true)
+        val started = ManualReplyAccessibilityService.requestReply {
+            overlay.setManualBusy(false)
+        }
+        if (started) return
+
+        overlay.setManualBusy(false)
+        overlay.showError("Hãy bật quyền Zcar - Nhận tay")
+        startActivity(
+            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
     }
 
     private fun postJson(path: String, payload: JSONObject): Boolean {

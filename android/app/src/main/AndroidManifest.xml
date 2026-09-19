@@ -56,6 +56,19 @@
             android:name=".OrderForegroundService"
             android:exported="false"
             android:foregroundServiceType="remoteMessaging" />
+
+        <service
+            android:name=".ManualReplyAccessibilityService"
+            android:exported="false"
+            android:label="@string/manual_reply_accessibility_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/manual_reply_accessibility_service" />
+        </service>
     </application>
 
 </manifest>
