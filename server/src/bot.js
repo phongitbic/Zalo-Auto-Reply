@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import { LoginQRCallbackEventType, ThreadType, Zalo } from "zca-js";
 import { RecentMessageCache } from "./recent-message-cache.js";
 import {
@@ -10,7 +11,6 @@ import {
   normalizeLocation,
   summarizePriorityRoutes,
 } from "./priority-routes.js";
-import { config } from "./config.js";
 
 const getMessageId = (message) =>
   message.data?.msgId ?? message.data?.cliMsgId ?? message.data?.globalMsgId;
@@ -98,6 +98,9 @@ export class ZaloReplyBot {
     reconnectMaxDelayMs = 30000,
     recentMessages = [],
     configUpdatedAt = null,
+    proxyUrl = "",
+    proxyTarget = null,
+    fetchImpl = fetch,
     preconnect = typeof fetch.preconnect === "function" ? fetch.preconnect.bind(fetch) : null,
     emit = () => { },
   }) {
@@ -125,16 +128,23 @@ export class ZaloReplyBot {
     this.reconnectAttempts = 0;
     this.reconnectTimer = null;
     this.shuttingDown = false;
+    this.proxyUrl = proxyUrl;
+    this.proxyTarget = proxyTarget;
+    this.proxyAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl, { keepAlive: true }) : undefined;
+    this.fetchImpl = fetchImpl;
+    if (proxyUrl) this.preconnect = null;
     this.httpFetch = (url, options = {}) => {
-      const { agent: _unusedAgent, dispatcher: _unusedDispatcher, ...fetchOptions } = options;
+      const { agent: _unusedAgent, dispatcher: _unusedDispatcher, proxy, ...fetchOptions } = options;
       const timeoutMs = String(url).includes("/keepalive")
         ? this.keepAliveRequestTimeoutMs
         : this.httpRequestTimeoutMs;
-      return fetch(url, {
+      const requestOptions = {
         ...fetchOptions,
         keepalive: true,
         signal: fetchOptions.signal ?? AbortSignal.timeout(timeoutMs),
-      });
+      };
+      if (this.proxyUrl || proxy) requestOptions.proxy = this.proxyUrl || proxy;
+      return this.fetchImpl(url, requestOptions);
     };
     this.emit = emit;
     this.api = null;
@@ -182,6 +192,7 @@ export class ZaloReplyBot {
       priorityRoutes: summarizePriorityRoutes(this.priorityRoutes),
       priorityRouteStats,
       redis: this.redis,
+      proxy: { enabled: Boolean(this.proxyUrl), server: this.proxyTarget },
       configUpdatedAt: this.configUpdatedAt,
       stats: this.stats,
     };
@@ -206,7 +217,7 @@ export class ZaloReplyBot {
         logging: false,
         checkUpdate: false,
         polyfill: this.httpFetch,
-        agent: config.proxyAgent,
+        agent: this.proxyAgent,
       });
       const api = await this.login(zalo);
       if (this.shuttingDown) return;
@@ -358,6 +369,7 @@ export class ZaloReplyBot {
     this.api = null;
     this.groupServiceOrigin = null;
     if (api?.listener) api.listener.stop();
+    this.proxyAgent?.destroy();
     this.status = "offline";
     this.publish();
   }
