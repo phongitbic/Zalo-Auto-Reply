@@ -51,7 +51,6 @@ Không commit `server/.env`, khóa ký Android, file QR hoặc session Zalo.
 
 Các biến quan trọng nằm trong [server/.env.example](server/.env.example):
 
-- `BOT_INSTANCE_ID`: để trống khi chạy một nick. Khi chạy nhiều nick, đặt ID khác nhau như `nick1`–`nick5`; backend tự tách toàn bộ file dữ liệu, Redis key và Pub/Sub channel theo ID này.
 - `ALLOWED_GROUP_IDS`: ID nhóm ban đầu/dự phòng, phân cách bằng dấu phẩy.
 - `ALLOWED_GROUPS_FILE`: file lưu danh sách nhóm được chọn trên giao diện; khi file này tồn tại, nó được ưu tiên hơn `.env`.
 - `CLIENT_ORIGINS`: origin web/Capacitor được phép kết nối.
@@ -151,20 +150,6 @@ pm2 status
 curl -fsS http://127.0.0.1:3001/health
 ```
 
-Để chạy 5 tài khoản độc lập trên cùng VPS và cùng một Redis local, dùng cấu hình nhiều tiến trình:
-
-```bash
-pm2 delete zalo-auto-reply
-pm2 start ecosystem.multi.config.cjs
-pm2 save
-pm2 status
-for port in 3001 3002 3003 3004 3005; do curl -fsS "http://127.0.0.1:$port/health"; echo; done
-```
-
-File này tạo `zcar-nick1`–`zcar-nick5` trên các cổng `3001`–`3005`. Mỗi tiến trình có `BOT_INSTANCE_ID` riêng, nên dùng các thư mục `server/data/nick1`–`server/data/nick5`, Redis prefix `zalo-auto-reply:nick1`–`zalo-auto-reply:nick5` và Pub/Sub channel riêng. Vì vậy một nick nhận đơn, chuyển STOP hoặc ghi chống trùng sẽ không xuất hiện ở nick khác. Các nick vẫn dùng chung duy nhất `REDIS_URL=redis://127.0.0.1:6379`; việc phân vùng chỉ thay tên khóa và không thêm thao tác vào đường gửi Zalo. Mỗi nick cần quét QR riêng trong giao diện ở đúng cổng của nó.
-
-Không chạy đồng thời `ecosystem.config.cjs` và `ecosystem.multi.config.cjs`, vì nick 1 sẽ bị trùng cổng `3001` và có nguy cơ tạo hai listener cho cùng tài khoản.
-
 Nếu PM2 đang giữ định nghĩa tiến trình cũ cùng tên, chuyển chắc chắn sang entry Bun bằng một lần dừng ngắn; lệnh `pm2 delete` chỉ xóa định nghĩa tiến trình, không xóa `.env`, session hay dữ liệu:
 
 ```bash
@@ -183,9 +168,11 @@ Sau khi cập nhật code:
 bun install --frozen-lockfile
 bun test
 bun run build
+pm2 startOrRestart ecosystem.config.cjs --update-env
+pm2 status
+pm2 logs zalo-auto-reply --lines 100
+curl -fsS http://127.0.0.1:3001/health
 ```
-
-Sau đó chỉ chạy **một** trong hai lệnh: `pm2 startOrRestart ecosystem.config.cjs --update-env` cho một nick, hoặc `pm2 startOrRestart ecosystem.multi.config.cjs --update-env` cho 5 nick. Cuối cùng kiểm tra bằng `pm2 status` và các endpoint `/health` tương ứng.
 
 Dùng `startOrRestart` thay vì chạy hai tiến trình song song: một tài khoản chỉ được có một Zalo listener. Đây là cập nhật gần như không gián đoạn nhưng tránh nguy cơ hai bot cùng trả lời một tin.
 
