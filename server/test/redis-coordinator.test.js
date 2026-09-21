@@ -152,6 +152,48 @@ test("Pub/Sub and config version synchronize a route change to every bot process
   await Promise.all([processOne.stop(), processTwo.stop()]);
 });
 
+test("separate bot namespaces never share an active order", async () => {
+  const backend = new FakeRedisBackend();
+  const first = { state: { enabled: true, mode: "priority", activeOrder: null }, routes: [] };
+  const second = { state: { enabled: true, mode: "priority", activeOrder: null }, routes: [] };
+  const makeCoordinator = (local, botId) => new RedisCoordinator({
+    url: "redis://fake",
+    prefix: `zcar:${botId}`,
+    channel: `zcar-updated:${botId}`,
+    instanceId: `process-${botId}`,
+    heartbeatMs: 60000,
+    clientFactory: () => new FakeRedisClient(backend),
+    getLocalConfig: () => local,
+    onRemoteConfig: async (remote) => {
+      local.state = remote.state;
+      local.routes = remote.routes;
+    },
+  });
+  const processOne = makeCoordinator(first, "nick1");
+  const processTwo = makeCoordinator(second, "nick2");
+  await Promise.all([processOne.start(), processTwo.start()]);
+  await waitFor(() => processOne.snapshot().connected && processTwo.snapshot().connected);
+
+  first.state = {
+    enabled: false,
+    mode: "priority",
+    activeOrder: { eventId: "nick1-order", originalContent: "Bắc Ninh đi Hà Nội" },
+  };
+  await processOne.saveConfiguration(["state"]);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+
+  assert.equal(second.state.enabled, true);
+  assert.equal(second.state.activeOrder, null);
+  assert.ok(backend.values.has("zcar:nick1:bot:state"));
+  assert.ok(backend.values.has("zcar:nick2:bot:state"));
+  assert.notEqual(
+    backend.values.get("zcar:nick1:bot:state"),
+    backend.values.get("zcar:nick2:bot:state")
+  );
+
+  await Promise.all([processOne.stop(), processTwo.stop()]);
+});
+
 test("keeps command health online when only the Pub/Sub connection drops", async () => {
   const backend = new FakeRedisBackend();
   const local = { state: { enabled: true, mode: "priority" }, routes: [] };
