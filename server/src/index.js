@@ -15,9 +15,6 @@ app.listen({
 });
 
 console.log(`Server listening on http://${config.serverHost}:${config.port} (Bun + Elysia)`);
-console.log(config.proxyTarget
-  ? `Zalo proxy enabled for ${config.botInstanceId || "default"}: ${config.proxyTarget}`
-  : `Zalo proxy disabled for ${config.botInstanceId || "default"}`);
 if (insecureAdminKey) {
   console.warn("ADMIN_KEY is missing or shorter than 32 characters; remote control is not secure.");
 }

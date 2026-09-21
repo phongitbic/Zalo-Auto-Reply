@@ -7,7 +7,6 @@
     "start": "bun --no-env-file src/index.js",
     "test": "bun --no-env-file test",
     "redis:check": "bun --no-env-file scripts/check-redis.js",
-    "proxy:check": "bun --no-env-file scripts/check-proxies.js",
     "benchmark": "bun --no-env-file scripts/benchmark-hot-path.js",
     "benchmark:http": "bun --no-env-file scripts/benchmark-http.js",
     "latency:report": "bun --no-env-file scripts/report-latency.js"
@@ -20,7 +19,6 @@
     "@socket.io/bun-engine": "0.1.2",
     "dotenv": "^17.2.2",
     "elysia": "1.4.30",
-    "https-proxy-agent": "^9.1.0",
     "redis": "^6.2.1",
     "socket.io": "4.8.3",
     "zca-js": "2.1.2"

@@ -3,7 +3,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPriorityRoutes } from "./priority-routes.js";
 import { loadJsonFile } from "./persistent-json-store.js";
-import { resolveProxyConfig } from "./proxy-config.js";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({
@@ -25,12 +24,6 @@ const splitValues = (value = "") =>
 const botInstanceId = String(process.env.BOT_INSTANCE_ID || "").trim();
 if (botInstanceId && !/^[A-Za-z0-9_-]{1,64}$/.test(botInstanceId)) {
   throw new Error("BOT_INSTANCE_ID must contain only letters, numbers, underscores or hyphens.");
-}
-
-const proxy = resolveProxyConfig(process.env, botInstanceId);
-const requireZaloProxy = process.env.REQUIRE_ZALO_PROXY === "true";
-if (requireZaloProxy && !proxy.url) {
-  throw new Error(`${proxy.environmentName} is required for this bot instance.`);
 }
 
 const instanceFile = (environmentName, fallback) => {
@@ -100,6 +93,5 @@ export const config = {
   redisHeartbeatMs: Math.max(5000, Number(process.env.REDIS_HEARTBEAT_MS) || 15000),
   redisConnectTimeoutMs: Math.max(1000, Number(process.env.REDIS_CONNECT_TIMEOUT_MS) || 5000),
   redisPingIntervalMs: Math.max(1000, Number(process.env.REDIS_PING_INTERVAL_MS) || 10000),
-  proxyUrl: proxy.url,
-  proxyTarget: proxy.target,
+  proxyAgent: process.env.ZALO_PROXY_AGENT || '',
 };

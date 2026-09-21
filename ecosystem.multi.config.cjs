@@ -18,7 +18,6 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         BOT_INSTANCE_ID: `nick${number}`,
-        REQUIRE_ZALO_PROXY: "true",
         PORT: 3000 + number,
       },
     };

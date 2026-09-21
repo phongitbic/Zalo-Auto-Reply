@@ -65,7 +65,6 @@ Các biến quan trọng nằm trong [server/.env.example](server/.env.example):
 - `REDIS_CHANNEL`: kênh Pub/Sub đồng bộ cấu hình, mặc định `priority_routes_updated`.
 - `REDIS_CONNECT_TIMEOUT_MS`: thời gian chờ mỗi lần mở socket Redis, mặc định 5 giây.
 - `REDIS_PING_INTERVAL_MS`: gửi PING định kỳ để NAT/firewall không cắt socket Redis nhàn rỗi, mặc định 10 giây.
-- `ZALO_PROXY_AGENT_NICK1`–`ZALO_PROXY_AGENT_NICK5`: năm HTTP(S) proxy độc lập cho năm tiến trình trong `ecosystem.multi.config.cjs`. Mỗi giá trị có dạng `http://user:password@host:port`; ký tự đặc biệt trong tài khoản hoặc mật khẩu phải được URL-encode.
 
 Redis Server 5 được hỗ trợ trực tiếp bằng RESP2. Không cần nâng Redis chỉ để chạy ứng dụng này. Trên Ubuntu 20.04, cài và bật gói Redis của hệ điều hành:
 
@@ -163,24 +162,6 @@ for port in 3001 3002 3003 3004 3005; do curl -fsS "http://127.0.0.1:$port/healt
 ```
 
 File này tạo `zcar-nick1`–`zcar-nick5` trên các cổng `3001`–`3005`. Mỗi tiến trình có `BOT_INSTANCE_ID` riêng, nên dùng các thư mục `server/data/nick1`–`server/data/nick5`, Redis prefix `zalo-auto-reply:nick1`–`zalo-auto-reply:nick5` và Pub/Sub channel riêng. Vì vậy một nick nhận đơn, chuyển STOP hoặc ghi chống trùng sẽ không xuất hiện ở nick khác. Các nick vẫn dùng chung duy nhất `REDIS_URL=redis://127.0.0.1:6379`; việc phân vùng chỉ thay tên khóa và không thêm thao tác vào đường gửi Zalo. Mỗi nick cần quét QR riêng trong giao diện ở đúng cổng của nó.
-
-Năm tiến trình bắt buộc có năm proxy riêng. Khai báo trong `server/.env` và không đặt dấu ngoặc kép:
-
-```env
-ZALO_PROXY_AGENT_NICK1=http://user1:password1@proxy1.example:8001
-ZALO_PROXY_AGENT_NICK2=http://user2:password2@proxy2.example:8002
-ZALO_PROXY_AGENT_NICK3=http://user3:password3@proxy3.example:8003
-ZALO_PROXY_AGENT_NICK4=http://user4:password4@proxy4.example:8004
-ZALO_PROXY_AGENT_NICK5=http://user5:password5@proxy5.example:8005
-```
-
-Kiểm tra cả năm proxy bằng đúng cơ chế `fetch` của Bun trước khi khởi động bot:
-
-```bash
-bun run --cwd server proxy:check
-```
-
-Lệnh chỉ in endpoint đã ẩn thông tin đăng nhập và IP thoát của từng nick. Cả năm dòng phải thành công và nên trả về năm IP mong muốn. Backend tạo một proxy agent duy nhất cho mỗi tiến trình rồi tái sử dụng nó; HTTPS gửi Zalo, QR/login, keep-alive, warm-up và WebSocket nhận tin đều đi cùng proxy. Nếu thiếu proxy của một nick, tiến trình đó dừng ngay thay vì âm thầm dùng IP VPS.
 
 Không chạy đồng thời `ecosystem.config.cjs` và `ecosystem.multi.config.cjs`, vì nick 1 sẽ bị trùng cổng `3001` và có nguy cơ tạo hai listener cho cùng tài khoản.
 
