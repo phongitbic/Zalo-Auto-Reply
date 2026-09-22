@@ -52,7 +52,7 @@ function App() {
   const [routeFilter, setRouteFilter] = React.useState("all");
   const [routeDraft, setRouteDraft] = React.useState(null);
   const [notificationSettings, setNotificationSettings] = React.useState(() => {
-    const defaults = { sound: true, vibrate: true, speech: false, overlay: true, manualReplyOverlay: false };
+    const defaults = { sound: true, vibrate: true, speech: false, overlay: true };
     try {
       return { ...defaults, ...(JSON.parse(storage.get("notificationSettings", "")) || {}) };
     } catch {
@@ -284,21 +284,6 @@ function App() {
     }
   }
 
-  async function setManualReplyEnabled(enabled) {
-    setNotificationSettings((value) => ({ ...value, manualReplyOverlay: enabled }));
-    if (!isNative) return;
-    try {
-      const state = await OrderService.setManualReplyEnabled({ enabled });
-      if (enabled && !state.overlayGranted) {
-        setNotice("Hãy cho phép Zcar hiển thị trên ứng dụng khác, sau đó quay lại ứng dụng");
-      } else if (enabled && !state.accessibilityGranted) {
-        setNotice("Trong phần Trợ năng, hãy bật dịch vụ Zcar - Nhận tay");
-      }
-    } catch (error) {
-      setNotice(error.message);
-    }
-  }
-
   async function saveRoute() {
     setBusy(true);
     try {
@@ -419,7 +404,6 @@ function App() {
               <label className="switch-row" key={key}><span>{label}</span><input type="checkbox" checked={notificationSettings[key]} onChange={(event) => setNotificationSettings((value) => ({ ...value, [key]: event.target.checked }))} /></label>
             ))}
             {isNative && <label className="switch-row"><span>Nút điều khiển nổi ngoài ứng dụng</span><input type="checkbox" checked={notificationSettings.overlay} onChange={(event) => void setOverlayEnabled(event.target.checked)} /></label>}
-            {isNative && <label className="switch-row"><span>Nút Nhận tay trực tiếp trên Zalo</span><input type="checkbox" checked={notificationSettings.manualReplyOverlay} onChange={(event) => void setManualReplyEnabled(event.target.checked)} /></label>}
             {isNative && <button className="secondary" onClick={() => void OrderService.openAppSettings()}>Mở cài đặt pin ứng dụng</button>}
           </section>
         </>

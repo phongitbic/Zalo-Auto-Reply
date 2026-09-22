@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPriorityRoutes } from "./priority-routes.js";
 import { loadJsonFile } from "./persistent-json-store.js";
+import { resolveProxyConfig } from "./proxy-config.js";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({
@@ -47,6 +48,8 @@ const botState = loadJsonFile(
   { enabled: true, mode: defaultMode },
   (value) => value && typeof value.enabled === "boolean" && ["all", "priority"].includes(value.mode)
 );
+const proxy = resolveProxyConfig(process.env.ZALO_PROXY_AGENT);
+
 export const config = {
   port: Number(process.env.PORT || 3001),
   serverHost: process.env.SERVER_HOST || "0.0.0.0",
@@ -79,5 +82,6 @@ export const config = {
   redisHeartbeatMs: Math.max(5000, Number(process.env.REDIS_HEARTBEAT_MS) || 15000),
   redisConnectTimeoutMs: Math.max(1000, Number(process.env.REDIS_CONNECT_TIMEOUT_MS) || 5000),
   redisPingIntervalMs: Math.max(1000, Number(process.env.REDIS_PING_INTERVAL_MS) || 10000),
-  proxyAgent: process.env.ZALO_PROXY_AGENT || '',
+  proxyUrl: proxy.url,
+  proxyTarget: proxy.target,
 };
