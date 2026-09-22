@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { HttpsProxyAgent } from "https-proxy-agent";
 import { LoginQRCallbackEventType, ThreadType, Zalo } from "zca-js";
 import { RecentMessageCache } from "./recent-message-cache.js";
 import {
@@ -99,9 +98,6 @@ export class ZaloReplyBot {
     reconnectMaxDelayMs = 30000,
     recentMessages = [],
     configUpdatedAt = null,
-    proxyUrl = "",
-    proxyTarget = null,
-    fetchImpl = fetch,
     preconnect = typeof fetch.preconnect === "function" ? fetch.preconnect.bind(fetch) : null,
     emit = () => { },
   }) {
@@ -121,29 +117,24 @@ export class ZaloReplyBot {
     this.keepAliveInFlight = false;
     this.groupPreconnectTimer = null;
     this.groupServiceOrigin = null;
+    this.groupWarmUpInFlight = false;
+    this.lastGroupActivityAt = 0;
     this.preconnect = preconnect;
     this.reconnectBaseDelayMs = reconnectBaseDelayMs;
     this.reconnectMaxDelayMs = reconnectMaxDelayMs;
     this.reconnectAttempts = 0;
     this.reconnectTimer = null;
     this.shuttingDown = false;
-    this.proxyUrl = proxyUrl;
-    this.proxyTarget = proxyTarget;
-    this.proxyAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl, { keepAlive: true }) : undefined;
-    this.fetchImpl = fetchImpl;
-    if (proxyUrl) this.preconnect = null;
     this.httpFetch = (url, options = {}) => {
-      const { agent: _unusedAgent, dispatcher: _unusedDispatcher, proxy, ...fetchOptions } = options;
+      const { agent: _unusedAgent, dispatcher: _unusedDispatcher, ...fetchOptions } = options;
       const timeoutMs = String(url).includes("/keepalive")
         ? this.keepAliveRequestTimeoutMs
         : this.httpRequestTimeoutMs;
-      const requestOptions = {
+      return fetch(url, {
         ...fetchOptions,
         keepalive: true,
         signal: fetchOptions.signal ?? AbortSignal.timeout(timeoutMs),
-      };
-      if (this.proxyUrl || proxy) requestOptions.proxy = this.proxyUrl || proxy;
-      return this.fetchImpl(url, requestOptions);
+      });
     };
     this.emit = emit;
     this.api = null;
@@ -191,7 +182,6 @@ export class ZaloReplyBot {
       priorityRoutes: summarizePriorityRoutes(this.priorityRoutes),
       priorityRouteStats,
       redis: this.redis,
-      proxy: { enabled: Boolean(this.proxyUrl), server: this.proxyTarget },
       configUpdatedAt: this.configUpdatedAt,
       stats: this.stats,
     };
@@ -216,7 +206,7 @@ export class ZaloReplyBot {
         logging: false,
         checkUpdate: false,
         polyfill: this.httpFetch,
-        agent: this.proxyAgent,
+        agent: config.proxyAgent,
       });
       const api = await this.login(zalo);
       if (this.shuttingDown) return;
@@ -307,13 +297,16 @@ export class ZaloReplyBot {
 
   preconnectGroupTransport() {
     try {
-      if (!this.preconnect) return false;
       if (!this.groupServiceOrigin) {
         const groupServiceUrl = this.api?.zpwServiceMap?.group?.[0];
         if (!groupServiceUrl) return false;
         this.groupServiceOrigin = new URL(groupServiceUrl).origin;
       }
-      this.preconnect(this.groupServiceOrigin);
+      if (this.preconnect) {
+        try {
+          this.preconnect(this.groupServiceOrigin);
+        } catch (_) { }
+      }
       return true;
     } catch (error) {
       if (this.hotPathLogging) console.warn("Zalo group preconnect failed:", error.message);
@@ -323,16 +316,35 @@ export class ZaloReplyBot {
 
   startGroupPreconnect() {
     if (this.groupPreconnectTimer || !this.preconnectGroupTransport()) return;
-    this.groupPreconnectTimer = setInterval(
-      () => this.preconnectGroupTransport(),
-      this.groupPreconnectIntervalMs
-    );
+
+    const warmUp = async () => {
+      this.preconnectGroupTransport();
+      if (this.groupWarmUpInFlight || !this.groupServiceOrigin) return;
+
+      // Option A1 (Adaptive): Tạm dừng nếu vừa có hoạt động nhắn tin trong 3 giây qua
+      if (performance.now() - this.lastGroupActivityAt < 3000) return;
+
+      this.groupWarmUpInFlight = true;
+      try {
+        await this.httpFetch(`${this.groupServiceOrigin}/`, {
+          method: "HEAD",
+          signal: AbortSignal.timeout(2500),
+        });
+      } catch (error) {
+        if (this.hotPathLogging) console.warn("Zalo group warm-up failed:", error.message);
+      } finally {
+        this.groupWarmUpInFlight = false;
+      }
+    };
+
+    this.groupPreconnectTimer = setInterval(warmUp, this.groupPreconnectIntervalMs);
     this.groupPreconnectTimer.unref?.();
   }
 
   stopGroupPreconnect() {
     if (this.groupPreconnectTimer) clearInterval(this.groupPreconnectTimer);
     this.groupPreconnectTimer = null;
+    this.groupWarmUpInFlight = false;
   }
 
   async stop() {
@@ -346,7 +358,6 @@ export class ZaloReplyBot {
     this.api = null;
     this.groupServiceOrigin = null;
     if (api?.listener) api.listener.stop();
-    this.proxyAgent?.destroy();
     this.status = "offline";
     this.publish();
   }
@@ -467,6 +478,7 @@ export class ZaloReplyBot {
 
   onMessage(message) {
     const receivedAt = performance.now();
+    this.lastGroupActivityAt = receivedAt;
     const receivedAtIso = new Date().toISOString();
     this.stats.received += 1;
     const threadId = String(message.threadId);
@@ -585,8 +597,9 @@ export class ZaloReplyBot {
 
     let sendPromise;
     try {
-      // Khi kết nối trực tiếp, preconnect origin ngay trước lần gửi đầu tiên hoặc sau reconnect.
-      if (this.preconnect && !this.groupServiceOrigin) this.preconnectGroupTransport();
+      // Nền đã giữ nóng groupServiceOrigin mỗi groupPreconnectIntervalMs; chỉ tự gọi lại ở
+      // đây khi origin chưa từng được xác định (tin đầu tiên hoặc vừa reconnect).
+      if (!this.groupServiceOrigin) this.preconnectGroupTransport();
       sendPromise = Promise.resolve(this.api.sendMessage(payload, message.threadId, ThreadType.Group));
     } catch (error) {
       reportFailure(error);

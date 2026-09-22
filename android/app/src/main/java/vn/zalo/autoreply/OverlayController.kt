@@ -28,19 +28,25 @@ class OverlayController(
     private val preferences: SharedPreferences,
     private val onControl: (String) -> Unit,
     private val onComplete: () -> Unit,
+    private val onManualReply: () -> Unit,
 ) {
     companion object {
         const val PREFERENCE_ENABLED = "overlay_enabled"
         const val PREFERENCE_PROMPTED = "overlay_prompted"
+        const val PREFERENCE_MANUAL_REPLY_ENABLED = "manual_reply_overlay_enabled"
         private const val PREFERENCE_X = "overlay_x"
         private const val PREFERENCE_Y = "overlay_y"
+        private const val PREFERENCE_MANUAL_X = "manual_reply_overlay_x"
+        private const val PREFERENCE_MANUAL_Y = "manual_reply_overlay_y"
     }
 
     private val main = Handler(Looper.getMainLooper())
     private val windowManager = service.getSystemService(WindowManager::class.java)
     private val buttonSize = dp(62)
+    private val manualButtonSize = dp(54)
     private var actionButton: ImageButton? = null
     private var buttonParams: WindowManager.LayoutParams? = null
+    private var manualButton: ImageButton? = null
     private var detailCard: LinearLayout? = null
     private var detailContent: TextView? = null
     private var detailMeta: TextView? = null
@@ -49,6 +55,7 @@ class OverlayController(
     private var acceptedOrder: JSONObject? = null
     private var connected = false
     private var busy = false
+    private var manualBusy = false
 
     fun render(nextStatus: JSONObject, isConnected: Boolean) {
         val copy = JSONObject(nextStatus.toString())
@@ -83,6 +90,13 @@ class OverlayController(
         }
     }
 
+    fun setManualBusy(value: Boolean) {
+        main.post {
+            manualBusy = value
+            updateManualButton()
+        }
+    }
+
     fun refreshPermission() {
         main.post { sync() }
     }
@@ -97,13 +111,25 @@ class OverlayController(
 
     private fun sync() {
         val controlEnabled = preferences.getBoolean(PREFERENCE_ENABLED, true)
-        if (!controlEnabled || !Settings.canDrawOverlays(service)) {
+        val manualReplyEnabled = preferences.getBoolean(PREFERENCE_MANUAL_REPLY_ENABLED, false)
+        if ((!controlEnabled && !manualReplyEnabled) || !Settings.canDrawOverlays(service)) {
             removeAll()
             return
         }
-        ensureButton()
-        updateButton()
-        if (acceptedOrder == null) removeCard() else updateCard()
+        if (controlEnabled) {
+            ensureButton()
+            updateButton()
+            if (acceptedOrder == null) removeCard() else updateCard()
+        } else {
+            removeCard()
+            removeActionButton()
+        }
+        if (manualReplyEnabled) {
+            ensureManualButton()
+            updateManualButton()
+        } else {
+            removeManualButton()
+        }
     }
 
     private fun ensureButton() {
@@ -137,6 +163,51 @@ class OverlayController(
             actionButton = null
             buttonParams = null
         }
+    }
+
+    private fun ensureManualButton() {
+        if (manualButton != null) return
+        val metrics = service.resources.displayMetrics
+        val params = WindowManager.LayoutParams(
+            manualButtonSize,
+            manualButtonSize,
+            overlayWindowType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = preferences.getInt(PREFERENCE_MANUAL_X, metrics.widthPixels - manualButtonSize - dp(20))
+                .coerceIn(0, (metrics.widthPixels - manualButtonSize).coerceAtLeast(0))
+            y = preferences.getInt(PREFERENCE_MANUAL_Y, dp(252))
+                .coerceIn(0, (metrics.heightPixels - manualButtonSize).coerceAtLeast(0))
+        }
+        val button = ImageButton(service).apply {
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            elevation = dp(12).toFloat()
+            setImageResource(R.drawable.ic_overlay_manual)
+            contentDescription = "Nhận tay: trả lời Ok tin nhắn gần nhất"
+            setOnClickListener { if (!manualBusy) onManualReply() }
+        }
+        attachDrag(button, params, manualButtonSize, PREFERENCE_MANUAL_X, PREFERENCE_MANUAL_Y)
+        try {
+            windowManager.addView(button, params)
+            manualButton = button
+        } catch (_: Exception) {
+            manualButton = null
+        }
+    }
+
+    private fun updateManualButton() {
+        val button = manualButton ?: return
+        button.background = roundedBackground(
+            Color.parseColor("#2563EB"),
+            manualButtonSize / 2f,
+            Color.argb(100, 255, 255, 255),
+            1,
+        )
+        button.alpha = if (manualBusy) 0.58f else 1f
+        button.isEnabled = !manualBusy
     }
 
     private fun updateButton() {
@@ -276,6 +347,7 @@ class OverlayController(
 
     private fun removeAll() {
         removeCard()
+        removeManualButton()
         removeActionButton()
     }
 
@@ -283,6 +355,11 @@ class OverlayController(
         actionButton?.let { runCatching { windowManager.removeView(it) } }
         actionButton = null
         buttonParams = null
+    }
+
+    private fun removeManualButton() {
+        manualButton?.let { runCatching { windowManager.removeView(it) } }
+        manualButton = null
     }
 
     private fun attachDrag(

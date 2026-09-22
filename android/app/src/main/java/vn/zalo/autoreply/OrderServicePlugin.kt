@@ -42,6 +42,10 @@ class OrderServicePlugin : Plugin() {
             .putBoolean("vibrate", settings.optBoolean("vibrate", true))
             .putBoolean("speech", settings.optBoolean("speech", false))
             .putBoolean(OverlayController.PREFERENCE_ENABLED, settings.optBoolean("overlay", true))
+            .putBoolean(
+                OverlayController.PREFERENCE_MANUAL_REPLY_ENABLED,
+                settings.optBoolean("manualReplyOverlay", false),
+            )
             .apply()
     }
 
@@ -53,6 +57,13 @@ class OrderServicePlugin : Plugin() {
                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 Uri.parse("package:${context.packageName}")
             ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+
+    private fun openManualReplySettings() {
+        context.startActivity(
+            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }
 
@@ -100,7 +111,7 @@ class OrderServicePlugin : Plugin() {
         )
         call.resolve()
         val preferences = context.getSharedPreferences(OrderForegroundService.PREFERENCES, 0)
-        if (settings.optBoolean("overlay", true) &&
+        if ((settings.optBoolean("overlay", true) || settings.optBoolean("manualReplyOverlay", false)) &&
             !overlayGranted() &&
             !preferences.getBoolean(OverlayController.PREFERENCE_PROMPTED, false)
         ) {
@@ -142,7 +153,37 @@ class OrderServicePlugin : Plugin() {
         call.resolve(JSObject().apply {
             put("enabled", enabled)
             put("granted", overlayGranted())
+            put(
+                "manualReplyEnabled",
+                context.getSharedPreferences(OrderForegroundService.PREFERENCES, 0)
+                    .getBoolean(OverlayController.PREFERENCE_MANUAL_REPLY_ENABLED, false),
+            )
+            put("manualReplyGranted", ManualReplyAccessibilityService.isReady())
         })
+    }
+
+    @PluginMethod
+    fun setManualReplyEnabled(call: PluginCall) {
+        val enabled = call.getBoolean("enabled") ?: false
+        context.getSharedPreferences(OrderForegroundService.PREFERENCES, 0).edit()
+            .putBoolean(OverlayController.PREFERENCE_MANUAL_REPLY_ENABLED, enabled)
+            .apply()
+        refreshOverlay()
+        if (enabled) {
+            if (!overlayGranted()) openOverlaySettings()
+            else if (!ManualReplyAccessibilityService.isReady()) openManualReplySettings()
+        }
+        call.resolve(JSObject().apply {
+            put("enabled", enabled)
+            put("overlayGranted", overlayGranted())
+            put("accessibilityGranted", ManualReplyAccessibilityService.isReady())
+        })
+    }
+
+    @PluginMethod
+    fun openManualReplySettings(call: PluginCall) {
+        openManualReplySettings()
+        call.resolve()
     }
 
     @PluginMethod

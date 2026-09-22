@@ -33,8 +33,6 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
     hotPathLogging: config.hotPathLogging,
     keepAliveIntervalMs: config.keepAliveIntervalMs,
     groupPreconnectIntervalMs: config.groupPreconnectIntervalMs,
-    proxyUrl: config.proxyUrl,
-    proxyTarget: config.proxyTarget,
     emit: (event, payload) => {
       if (event === "ORDER_ACCEPTED") {
         void redisCoordinator?.recordProcessed(payload.groupId, payload.messageId);
