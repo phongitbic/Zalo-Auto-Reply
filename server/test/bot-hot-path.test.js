@@ -46,42 +46,6 @@ test("does not auto-reply to an empty or non-text message", () => {
   assert.equal(calls, 0);
 });
 
-test("reuses one proxy agent and forces Zalo HTTP requests through the proxy", async () => {
-  const requests = [];
-  const proxyUrl = "http://user:secret@proxy.example:8080/";
-  const bot = new ZaloReplyBot({
-    allowedGroupIds: new Set(),
-    replyText: "Ok",
-    sessionFile: "unused",
-    proxyUrl,
-    proxyTarget: "http://proxy.example:8080",
-    fetchImpl: async (url, options) => {
-      requests.push({ url, options });
-      return new Response("ok");
-    },
-  });
-
-  const originalAgent = bot.proxyAgent;
-  await bot.httpFetch("https://group.example.test/send", {
-    method: "POST",
-    agent: { shouldNotBeUsed: true },
-    dispatcher: { shouldNotBeUsed: true },
-  });
-  await bot.httpFetch("https://group.example.test/send-again");
-
-  assert.equal(bot.proxyAgent, originalAgent);
-  assert.equal(bot.proxyAgent.proxy.href, proxyUrl);
-  assert.equal(requests.length, 2);
-  assert.equal(requests[0].options.proxy, proxyUrl);
-  assert.equal(requests[1].options.proxy, proxyUrl);
-  assert.equal("agent" in requests[0].options, false);
-  assert.equal("dispatcher" in requests[0].options, false);
-  assert.deepEqual(bot.snapshot().proxy, {
-    enabled: true,
-    server: "http://proxy.example:8080",
-  });
-});
-
 test("applies selected and deselected groups immediately from the in-memory Set", async () => {
   let calls = 0;
   const bot = new ZaloReplyBot({

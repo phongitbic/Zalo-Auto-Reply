@@ -28,15 +28,6 @@ Nếu cùng một người gửi cùng nội dung vào nhiều nhóm trong vòng
 
 Yêu cầu Bun 1.4.1 trở lên; build Android cần thêm JDK 21 và Android SDK.
 
-Nếu dùng một HTTP proxy cho toàn bộ kết nối Zalo, đặt `ZALO_PROXY_AGENT` trong
-`server/.env` theo dạng `http://user:password@ip:port`. Bot tạo một proxy agent
-khi khởi động và dùng lại cho cả HTTP lẫn WebSocket. Kiểm tra IP đầu ra mà không
-in tài khoản/mật khẩu bằng:
-
-```bash
-bun run --cwd server proxy:check
-```
-
 ```powershell
 irm bun.sh/install.ps1 | iex
 bun install --frozen-lockfile
