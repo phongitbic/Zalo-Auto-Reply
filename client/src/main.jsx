@@ -51,8 +51,9 @@ function App() {
   const [routeSearch, setRouteSearch] = React.useState("");
   const [routeFilter, setRouteFilter] = React.useState("all");
   const [routeDraft, setRouteDraft] = React.useState(null);
+  const [importDialog, setImportDialog] = React.useState(null);
   const [notificationSettings, setNotificationSettings] = React.useState(() => {
-    const defaults = { sound: true, vibrate: true, speech: false, overlay: true, manualReplyOverlay: false };
+    const defaults = { sound: true, vibrate: true, speech: false, overlay: true };
     try {
       return { ...defaults, ...(JSON.parse(storage.get("notificationSettings", "")) || {}) };
     } catch {
@@ -256,21 +257,6 @@ function App() {
     }
   }
 
-  async function logoutZalo() {
-    if (!window.confirm("Đăng xuất tài khoản Zalo khỏi Zcar và tạo mã QR đăng nhập mới?")) return;
-    setBusy(true);
-    try {
-      const result = await apiFetch("/api/zalo/logout", { method: "POST" });
-      setStatus(result.status);
-      setQrRevision(String(Date.now()));
-      setNotice("Đã đăng xuất Zalo khỏi Zcar. Đang tạo mã QR đăng nhập mới.");
-    } catch (error) {
-      setNotice(error.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function setOverlayEnabled(enabled) {
     setNotificationSettings((value) => ({ ...value, overlay: enabled }));
     if (!isNative) return;
@@ -278,21 +264,6 @@ function App() {
       const state = await OrderService.setOverlayEnabled({ enabled });
       if (enabled && !state.granted) {
         setNotice("Hãy cho phép Zcar hiển thị trên ứng dụng khác, sau đó quay lại ứng dụng");
-      }
-    } catch (error) {
-      setNotice(error.message);
-    }
-  }
-
-  async function setManualReplyEnabled(enabled) {
-    setNotificationSettings((value) => ({ ...value, manualReplyOverlay: enabled }));
-    if (!isNative) return;
-    try {
-      const state = await OrderService.setManualReplyEnabled({ enabled });
-      if (enabled && !state.overlayGranted) {
-        setNotice("Hãy cho phép Zcar hiển thị trên ứng dụng khác, sau đó quay lại ứng dụng");
-      } else if (enabled && !state.accessibilityGranted) {
-        setNotice("Trong phần Trợ năng, hãy bật dịch vụ Zcar - Nhận tay");
       }
     } catch (error) {
       setNotice(error.message);
@@ -369,6 +340,59 @@ function App() {
     }
   }
 
+  async function previewFile(file) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".txt")) {
+      setNotice("Chỉ chấp nhận file .txt");
+      return;
+    }
+    setBusy(true);
+    try {
+      const content = await file.text();
+      const result = await apiFetch("/api/settings/priority-routes/preview", {
+        method: "POST",
+        body: JSON.stringify({ fileName: file.name, content }),
+      });
+      setImportDialog({ fileName: file.name, content, preview: result.preview });
+    } catch (error) {
+      if (error.payload?.preview) setImportDialog({ fileName: file.name, content: await file.text(), preview: error.payload.preview });
+      setNotice(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmImport() {
+    setBusy(true);
+    try {
+      const result = await apiFetch("/api/settings/priority-routes/import", {
+        method: "POST",
+        body: JSON.stringify({ fileName: importDialog.fileName, content: importDialog.content }),
+      });
+      setImportDialog(null);
+      showSaved(result, `Đã nhập ${result.import?.added ?? 0} tuyến`);
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function downloadBackup() {
+    try {
+      const result = await apiFetch("/api/settings/priority-routes/export");
+      const blob = new Blob([JSON.stringify(result, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `priority-routes-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setNotice(error.message);
+    }
+  }
+
   const routes = status?.priorityRoutes || [];
   const query = routeSearch.trim().toLocaleLowerCase("vi");
   const visibleRoutes = routes.filter((route) => {
@@ -407,11 +431,13 @@ function App() {
           onUpdate={updateRoute}
           onDelete={deleteRoute}
           onToggleAll={toggleAll}
+          onFile={previewFile}
+          onBackup={downloadBackup}
         />
       )}
       {page === "settings" && (
         <>
-          <ZaloLogin status={status} apiUrl={apiUrl} token={adminToken} revision={qrRevision} busy={busy} onLogout={logoutZalo} />
+          <ZaloLogin status={status} apiUrl={apiUrl} token={adminToken} revision={qrRevision} />
           <GroupSelector apiFetch={apiFetch} status={status} onStatus={setStatus} onNotice={setNotice} />
           <section className="settings panel">
             <h2>Thông báo Android</h2>
@@ -419,7 +445,6 @@ function App() {
               <label className="switch-row" key={key}><span>{label}</span><input type="checkbox" checked={notificationSettings[key]} onChange={(event) => setNotificationSettings((value) => ({ ...value, [key]: event.target.checked }))} /></label>
             ))}
             {isNative && <label className="switch-row"><span>Nút điều khiển nổi ngoài ứng dụng</span><input type="checkbox" checked={notificationSettings.overlay} onChange={(event) => void setOverlayEnabled(event.target.checked)} /></label>}
-            {isNative && <label className="switch-row"><span>Nút Nhận tay trực tiếp trên Zalo</span><input type="checkbox" checked={notificationSettings.manualReplyOverlay} onChange={(event) => void setManualReplyEnabled(event.target.checked)} /></label>}
             {isNative && <button className="secondary" onClick={() => void OrderService.openAppSettings()}>Mở cài đặt pin ứng dụng</button>}
           </section>
         </>
@@ -436,6 +461,7 @@ function App() {
       )}
 
       {routeDraft && <RouteDialog draft={routeDraft} setDraft={setRouteDraft} busy={busy} onSave={saveRoute} onClose={() => setRouteDraft(null)} />}
+      {importDialog && <ImportDialog data={importDialog} busy={busy} onConfirm={confirmImport} onClose={() => setImportDialog(null)} />}
       {notice && <button className="notice" onClick={() => setNotice("")}>{notice}</button>}
     </main>
   );
@@ -493,11 +519,11 @@ function ReceivedOrderPage({ order, busy, onComplete }) {
   </section>;
 }
 
-function RoutesPage({ routes, visibleRoutes, routeSearch, setRouteSearch, routeFilter, setRouteFilter, savingRouteId, onAdd, onEdit, onUpdate, onDelete, onToggleAll }) {
+function RoutesPage({ routes, visibleRoutes, routeSearch, setRouteSearch, routeFilter, setRouteFilter, savingRouteId, onAdd, onEdit, onUpdate, onDelete, onToggleAll, onFile, onBackup }) {
   const allEnabled = routes.length > 0 && routes.every((route) => route.enabled);
   return <section>
     <div className="section-heading"><div><span className="eyebrow">CÀI ĐẶT</span><h2>Cuốc xe ưu tiên</h2></div><button className="primary" onClick={onAdd}>+ Thêm tuyến mới</button></div>
-    <div className="route-toolbar panel"><input type="search" placeholder="Tìm điểm đi, điểm đến, giá tiền hoặc từ khóa" value={routeSearch} onChange={(event) => setRouteSearch(event.target.value)} /><select value={routeFilter} onChange={(event) => setRouteFilter(event.target.value)}><option value="all">Tất cả tuyến</option><option value="enabled">Đang bật</option><option value="disabled">Đang tắt</option></select></div>
+    <div className="route-toolbar panel"><input type="search" placeholder="Tìm điểm đi, điểm đến, giá tiền hoặc từ khóa" value={routeSearch} onChange={(event) => setRouteSearch(event.target.value)} /><select value={routeFilter} onChange={(event) => setRouteFilter(event.target.value)}><option value="all">Tất cả tuyến</option><option value="enabled">Đang bật</option><option value="disabled">Đang tắt</option></select><label className="file-button">Tải file TXT<input type="file" accept=".txt,text/plain" disabled={savingRouteId === "all"} onChange={(event) => { void onFile(event.target.files?.[0]); event.target.value = ""; }} /></label><button className="secondary" onClick={() => void onBackup()}>Tải xuống bản sao</button></div>
     <label className="bulk-switch panel"><span><strong>Bật/tắt tất cả tuyến</strong><small>{routes.length} tuyến trong cấu hình</small></span><input type="checkbox" checked={allEnabled} disabled={!routes.length || savingRouteId === "all"} onChange={(event) => void onToggleAll(event.target.checked)} /></label>
     <div className="route-list">{visibleRoutes.length === 0 ? <p className="empty">Không có tuyến phù hợp.</p> : visibleRoutes.map((route) => <RouteCard key={route.id} {...{ route, savingRouteId, onEdit, onUpdate, onDelete }} />)}</div>
   </section>;
@@ -646,7 +672,13 @@ function GroupSelector({ apiFetch, status, onStatus, onNotice }) {
   </section>;
 }
 
-function ZaloLogin({ status, apiUrl, token, revision, busy, onLogout }) {
+function ImportDialog({ data, busy, onConfirm, onClose }) {
+  const { preview } = data;
+  const hasErrors = preview.errors.length > 0;
+  return <div className="modal-backdrop"><section className="modal wide"><div className="section-heading"><div><span className="eyebrow">XEM TRƯỚC FILE TXT</span><h2>{data.fileName}</h2></div><button className="icon-button" onClick={onClose}>×</button></div><div className="preview-summary"><strong>{preview.routes.length} tuyến mới</strong><span>{preview.duplicates.length} tuyến trùng</span><span className={hasErrors ? "error-text" : ""}>{preview.errors.length} dòng lỗi</span></div>{hasErrors && <div className="error-list">{preview.errors.map((error) => <p key={`${error.line}-${error.reason}`}><strong>Dòng {error.line}:</strong> {error.reason} <code>{error.content}</code></p>)}</div>}<div className="preview-list">{preview.routes.map((route) => <p key={route.id}>{route.origin} <strong>→</strong> {route.destination}</p>)}</div>{preview.duplicates.length > 0 && <details><summary>Tuyến trùng đã bỏ qua</summary>{preview.duplicates.map((item) => <p key={`${item.line}-${item.content}`}>Dòng {item.line}: {item.content}</p>)}</details>}<div className="form-actions"><button className="secondary" onClick={onClose}>Hủy</button><button className="primary" disabled={busy || hasErrors || preview.routes.length === 0} onClick={() => void onConfirm()}>{busy ? "Đang nhập…" : "Xác nhận nhập"}</button></div></section></div>;
+}
+
+function ZaloLogin({ status, apiUrl, token, revision }) {
   const labels = {
     online: "Đã đăng nhập",
     qr_required: "Chờ quét QR",
@@ -665,7 +697,6 @@ function ZaloLogin({ status, apiUrl, token, revision, busy, onLogout }) {
       : status.status === "online"
         ? <p className="zalo-login-success">✓ Zalo đã đăng nhập và đang duy trì kết nối.</p>
         : <p className="muted">Máy chủ đang tạo mã QR. Mã sẽ tự xuất hiện tại đây khi sẵn sàng.</p>}
-    {["online", "reconnecting", "error"].includes(status.status) && <button className="danger" disabled={busy} onClick={() => void onLogout()}>{busy ? "Đang đăng xuất…" : "Đăng xuất Zalo"}</button>}
   </section>;
 }
 

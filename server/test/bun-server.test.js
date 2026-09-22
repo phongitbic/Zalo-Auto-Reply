@@ -313,22 +313,6 @@ test("Bun/Elysia preserves the HTTP and Socket.IO contracts", { skip: !isBun }, 
     assert.equal(authError.message, "Unauthorized");
     rejected.disconnect();
 
-    await fs.writeFile(config.sessionFile, "saved-session");
-    await fs.writeFile(config.qrFile, "old-qr");
-    let listenerStopped = false;
-    runtime.bot.api = { listener: { stop: () => { listenerStopped = true; } } };
-    runtime.bot.start = async function startQrLogin() {
-      this.status = "qr_required";
-      this.qrAvailable = true;
-      this.publish();
-    };
-    const logoutResponse = await request("/api/zalo/logout", { method: "POST" });
-    assert.equal(logoutResponse.status, 200);
-    assert.equal((await logoutResponse.json()).status.status, "qr_required");
-    assert.equal(listenerStopped, true);
-    await assert.rejects(fs.access(config.sessionFile));
-    await assert.rejects(fs.access(config.qrFile));
-
     const page = await fetch(`${baseUrl}/`);
     assert.equal(page.status, 200);
     assert.match(await page.text(), /<title>test<\/title>/);

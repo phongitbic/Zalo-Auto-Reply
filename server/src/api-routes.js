@@ -31,14 +31,6 @@ export const createApiRoutes = ({ config, runtime, tokenMatches }) =>
         return errorResponse(set, 500, "Could not read the QR code.");
       }
     })
-    .post("/zalo/logout", async ({ set }) => {
-      try {
-        return { status: await runtime.logoutZalo() };
-      } catch (error) {
-        console.error("Logging out of Zalo failed:", error);
-        return errorResponse(set, 500, "Không thể đăng xuất Zalo.");
-      }
-    })
     .post("/bot/control", async ({ body, set }) => {
       const action = body?.action;
       const mode = body?.mode;

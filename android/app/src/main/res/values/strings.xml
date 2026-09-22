@@ -4,6 +4,4 @@
     <string name="title_activity_main">Điều khiển nhận đơn</string>
     <string name="package_name">vn.zalo.autoreply</string>
     <string name="custom_url_scheme">vn.zalo.autoreply</string>
-    <string name="manual_reply_accessibility_label">Zcar - Nhận tay</string>
-    <string name="manual_reply_accessibility_description">Cho phép nút Nhận tay trả lời Ok cho tin nhắn gần nhất trong nhóm Zalo đang mở.</string>
 </resources>
