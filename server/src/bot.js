@@ -11,6 +11,7 @@ import {
   summarizePriorityRoutes,
 } from "./priority-routes.js";
 import { config } from "./config.js";
+import { WarmGroupTransport } from "./warm-group-transport.js";
 
 const getMessageId = (message) =>
   message.data?.msgId ?? message.data?.cliMsgId ?? message.data?.globalMsgId;
@@ -91,14 +92,16 @@ export class ZaloReplyBot {
     priorityRoutes = [],
     hotPathLogging = false,
     keepAliveIntervalMs = 5000,
-    groupPreconnectIntervalMs = 1000,
+    groupPreconnectIntervalMs = 5000,
+    groupConnections = 2,
+    groupWarmUpTimeoutMs = 3000,
+    createGroupTransport = (options) => new WarmGroupTransport(options),
     keepAliveRequestTimeoutMs = 5000,
     httpRequestTimeoutMs = 30000,
     reconnectBaseDelayMs = 1000,
     reconnectMaxDelayMs = 30000,
     recentMessages = [],
     configUpdatedAt = null,
-    preconnect = typeof fetch.preconnect === "function" ? fetch.preconnect.bind(fetch) : null,
     emit = () => { },
   }) {
     this.allowedGroupIds = allowedGroupIds;
@@ -115,17 +118,23 @@ export class ZaloReplyBot {
     this.httpRequestTimeoutMs = httpRequestTimeoutMs;
     this.keepAliveTimer = null;
     this.keepAliveInFlight = false;
-    this.groupPreconnectTimer = null;
+    this.groupConnections = groupConnections;
+    this.groupWarmUpTimeoutMs = groupWarmUpTimeoutMs;
+    this.createGroupTransport = createGroupTransport;
+    this.groupTransport = null;
+    this.groupTransportRetryTimer = null;
     this.groupServiceOrigin = null;
-    this.groupWarmUpInFlight = false;
-    this.lastGroupActivityAt = 0;
-    this.preconnect = preconnect;
     this.reconnectBaseDelayMs = reconnectBaseDelayMs;
     this.reconnectMaxDelayMs = reconnectMaxDelayMs;
     this.reconnectAttempts = 0;
     this.reconnectTimer = null;
     this.shuttingDown = false;
     this.httpFetch = (url, options = {}) => {
+      // Lệnh gửi tin nhóm → kết nối nóng riêng. Khi zca-js truyền proxy (đang test) thì giữ nguyên
+      // đường fetch cũ để không đổi hành vi proxy.
+      if (!options.proxy && this.groupTransport?.handles(url)) {
+        return this.groupTransport.request(url, options);
+      }
       const { agent: _unusedAgent, dispatcher: _unusedDispatcher, ...fetchOptions } = options;
       const timeoutMs = String(url).includes("/keepalive")
         ? this.keepAliveRequestTimeoutMs
@@ -153,6 +162,17 @@ export class ZaloReplyBot {
       lastDispatchMs: null,
       lastNetworkMs: null,
       lastLatencyMs: null,
+      lastGroupWarmUpAt: null,
+      lastGroupWarmUpMs: null,
+      lastGroupWarmUpStatus: null,
+      groupWarmUpSuccesses: 0,
+      groupWarmUpFailures: 0,
+      groupConnections: 0,
+      groupConnectionsReady: 0,
+      groupReconnects: 0,
+      warmSends: 0,
+      coldSends: 0,
+      lastSendConnectionWarm: null,
     };
     this.redis = { status: "disabled", connected: false, version: 0, lastSyncedAt: null, error: null };
     this.configUpdatedAt = configUpdatedAt;
@@ -295,56 +315,44 @@ export class ZaloReplyBot {
     this.keepAliveTimer = null;
   }
 
-  preconnectGroupTransport() {
+  startGroupPreconnect() {
+    if (this.groupTransport || this.shuttingDown) return;
+    const groupServiceUrl = this.api?.zpwServiceMap?.group?.[0];
+    if (!groupServiceUrl) {
+      // Chưa có service map (hiếm) → thử lại thay vì bỏ hẳn việc giữ nóng.
+      if (this.api && !this.groupTransportRetryTimer) {
+        this.groupTransportRetryTimer = setTimeout(() => {
+          this.groupTransportRetryTimer = null;
+          this.startGroupPreconnect();
+        }, 1000);
+        this.groupTransportRetryTimer.unref?.();
+      }
+      return;
+    }
     try {
-      if (!this.groupServiceOrigin) {
-        const groupServiceUrl = this.api?.zpwServiceMap?.group?.[0];
-        if (!groupServiceUrl) return false;
-        this.groupServiceOrigin = new URL(groupServiceUrl).origin;
-      }
-      if (this.preconnect) {
-        try {
-          this.preconnect(this.groupServiceOrigin);
-        } catch (_) { }
-      }
-      return true;
+      this.groupServiceOrigin = new URL(groupServiceUrl).origin;
+      this.groupTransport = this.createGroupTransport({
+        origin: this.groupServiceOrigin,
+        connections: this.groupConnections,
+        warmIntervalMs: this.groupPreconnectIntervalMs,
+        warmTimeoutMs: this.groupWarmUpTimeoutMs,
+        requestTimeoutMs: this.httpRequestTimeoutMs,
+        stats: this.stats,
+        logger: this.hotPathLogging ? console : null,
+      });
+      this.groupTransport.start();
     } catch (error) {
-      if (this.hotPathLogging) console.warn("Zalo group preconnect failed:", error.message);
-      return false;
+      this.groupTransport = null;
+      console.error("Starting warm group transport failed:", error.message);
     }
   }
 
-  startGroupPreconnect() {
-    if (this.groupPreconnectTimer || !this.preconnectGroupTransport()) return;
-
-    const warmUp = async () => {
-      this.preconnectGroupTransport();
-      if (this.groupWarmUpInFlight || !this.groupServiceOrigin) return;
-
-      // Option A1 (Adaptive): Tạm dừng nếu vừa có hoạt động nhắn tin trong 3 giây qua
-      if (performance.now() - this.lastGroupActivityAt < 3000) return;
-
-      this.groupWarmUpInFlight = true;
-      try {
-        await this.httpFetch(`${this.groupServiceOrigin}/`, {
-          method: "HEAD",
-          signal: AbortSignal.timeout(2500),
-        });
-      } catch (error) {
-        if (this.hotPathLogging) console.warn("Zalo group warm-up failed:", error.message);
-      } finally {
-        this.groupWarmUpInFlight = false;
-      }
-    };
-
-    this.groupPreconnectTimer = setInterval(warmUp, this.groupPreconnectIntervalMs);
-    this.groupPreconnectTimer.unref?.();
-  }
-
   stopGroupPreconnect() {
-    if (this.groupPreconnectTimer) clearInterval(this.groupPreconnectTimer);
-    this.groupPreconnectTimer = null;
-    this.groupWarmUpInFlight = false;
+    if (this.groupTransportRetryTimer) clearTimeout(this.groupTransportRetryTimer);
+    this.groupTransportRetryTimer = null;
+    const transport = this.groupTransport;
+    this.groupTransport = null;
+    transport?.close();
   }
 
   async stop() {
@@ -449,7 +457,6 @@ export class ZaloReplyBot {
 
   onMessage(message) {
     const receivedAt = performance.now();
-    this.lastGroupActivityAt = receivedAt;
     const receivedAtIso = new Date().toISOString();
     this.stats.received += 1;
     const threadId = String(message.threadId);
@@ -568,9 +575,7 @@ export class ZaloReplyBot {
 
     let sendPromise;
     try {
-      // Nền đã giữ nóng groupServiceOrigin mỗi groupPreconnectIntervalMs; chỉ tự gọi lại ở
-      // đây khi origin chưa từng được xác định (tin đầu tiên hoặc vừa reconnect).
-      if (!this.groupServiceOrigin) this.preconnectGroupTransport();
+      // Không hủy/không dùng cuốc để làm nóng: groupTransport tự chọn kết nối đã nóng và đang rảnh.
       sendPromise = Promise.resolve(this.api.sendMessage(payload, message.threadId, ThreadType.Group));
     } catch (error) {
       reportFailure(error);
