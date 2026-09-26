@@ -58,9 +58,7 @@ Các biến quan trọng nằm trong [server/.env.example](server/.env.example):
 - `BOT_STATE_FILE`: lưu START/STOP và chế độ hiện tại.
 - `MAX_SOCKET_CONNECTIONS`: giới hạn client đồng thời cho một instance.
 - `KEEP_ALIVE_INTERVAL_MS`: heartbeat Zalo, mặc định và tối thiểu 5 giây.
-- `GROUP_PRECONNECT_INTERVAL_MS`: chu kỳ làm nóng mỗi kết nối gửi tin nhóm, mặc định và tối thiểu 5 giây; các kết nối được làm nóng so le, không bao giờ cùng lúc.
-- `GROUP_WARM_CONNECTIONS`: số kết nối gửi nhóm giữ nóng song song, mặc định 2 (2–4). Cuốc luôn đi trên kết nối đã nối và đang rảnh; không hủy lượt làm nóng, không dùng cuốc thật để làm nóng.
-- `GROUP_WARM_UP_TIMEOUT_MS`: thời gian chờ tối đa một lượt làm nóng, mặc định 3 giây.
+- `GROUP_PRECONNECT_INTERVAL_MS`: chuẩn bị sẵn DNS/TCP/TLS tới đúng host gửi nhóm, mặc định 1 giây. Backend cũng preconnect ngay trước mỗi lần gửi; không tạo request API Zalo giả.
 - `REDIS_URL`: địa chỉ Redis 5, mặc định `redis://127.0.0.1:6379`; nếu có `requirepass` dùng `redis://:MAT_KHAU_URL_ENCODED@127.0.0.1:6379`.
 - `REDIS_PREFIX`: tiền tố khóa khi nhiều ứng dụng dùng chung Redis.
 - `REDIS_CHANNEL`: kênh Pub/Sub đồng bộ cấu hình, mặc định `priority_routes_updated`.
@@ -295,8 +293,7 @@ Build release cố ý thất bại nếu không có cấu hình ký cục bộ h
 ## Kiến trúc độ trễ thấp
 
 - Zalo Socket nhận sự kiện; không polling tin nhắn.
-- Lệnh gửi tin nhóm (`/api/group/sendmsg|mention|quote`) đi qua `WarmGroupTransport` (`server/src/warm-group-transport.js` + `server/src/http-connection.js`): 2 socket HTTP/1.1 riêng tới máy chủ nhóm, mở ngay khi đăng nhập, làm nóng luân phiên. Zalo đóng socket → mở và làm nóng lại ngay ở nền (backoff 0 / 250 ms / 1 s / 3 s nếu lỗi liên tiếp). Các API khác và heartbeat vẫn dùng `fetch` native của Bun. Khi zca-js truyền proxy, lệnh gửi quay về đường `fetch` cũ.
-- Theo dõi trong `stats`: `groupConnectionsReady` (số kết nối nóng), `warmSends`/`coldSends` (cuốc đi trên kết nối nóng/lạnh), `lastSendConnectionWarm`, `groupReconnects`, `groupWarmUpConnectionClose` (Zalo trả `Connection: close` cho lượt làm nóng — nếu tăng đều thì làm nóng không giữ được socket).
+- `fetch` native của Bun tự dùng connection pooling và HTTP Keep-Alive; heartbeat không chiếm một pool nhỏ riêng nên không xếp hàng trước lệnh gửi.
 - Allowlist dùng `Set`; tuyến đã chuẩn hóa nằm trong RAM.
 - Bộ dò tuyến dùng cây token và chỉ mục ngược, nên không quét toàn bộ 5.000 tuyến cho mỗi tin.
 - Dedupe diễn ra trước khi so tuyến; các message gần nhất được khôi phục từ Redis và lịch sử sau restart.

@@ -33,8 +33,6 @@ export const createBackendRuntime = ({ config, broadcast = () => {} }) => {
     hotPathLogging: config.hotPathLogging,
     keepAliveIntervalMs: config.keepAliveIntervalMs,
     groupPreconnectIntervalMs: config.groupPreconnectIntervalMs,
-    groupConnections: config.groupConnections,
-    groupWarmUpTimeoutMs: config.groupWarmUpTimeoutMs,
     emit: (event, payload) => {
       if (event === "ORDER_ACCEPTED") {
         void redisCoordinator?.recordProcessed(payload.groupId, payload.messageId);

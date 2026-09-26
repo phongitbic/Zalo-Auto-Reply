@@ -276,75 +276,33 @@ test("starts one Zalo keep-alive request immediately without overlapping", async
   await pendingRequest;
 });
 
-test("routes only group send URLs through the warm group transport", async () => {
-  const transportCalls = [];
-  const created = [];
+test("preconnects the group send origin once and does not call a Zalo API", () => {
+  const origins = [];
   const bot = new ZaloReplyBot({
     allowedGroupIds: new Set(),
     replyText: "Ok",
     sessionFile: "unused",
-    createGroupTransport: (options) => {
-      created.push(options);
-      return {
-        start: () => {},
-        close: () => {},
-        handles: (url) => new URL(url).pathname === "/api/group/mention",
-        request: async (url) => {
-          transportCalls.push(url);
-          return new Response("warm");
-        },
-      };
-    },
+    groupPreconnectIntervalMs: 60000,
+    preconnect: (origin) => origins.push(origin),
   });
-  bot.api = { zpwServiceMap: { group: ["https://group.example.test/api/group"] } };
+  bot.api = {
+    zpwServiceMap: { group: ["https://group.example.test/api/group"] },
+  };
+
   bot.startGroupPreconnect();
   bot.startGroupPreconnect();
 
-  assert.equal(created.length, 1);
-  assert.equal(created[0].origin, "https://group.example.test");
-  assert.equal(created[0].connections, 2);
-  const response = await bot.httpFetch("https://group.example.test/api/group/mention?zpw_ver=1", { method: "POST" });
-  assert.equal(await response.text(), "warm");
-  assert.deepEqual(transportCalls, ["https://group.example.test/api/group/mention?zpw_ver=1"]);
+  assert.deepEqual(origins, ["https://group.example.test"]);
   bot.stopGroupPreconnect();
 });
 
-test("keeps the proxy code path unchanged when zca-js passes a proxy", async () => {
-  let transportUsed = false;
-  const bot = new ZaloReplyBot({
-    allowedGroupIds: new Set(),
-    replyText: "Ok",
-    sessionFile: "unused",
-    createGroupTransport: () => ({
-      start: () => {},
-      close: () => {},
-      handles: () => true,
-      request: async () => { transportUsed = true; return new Response("warm"); },
-    }),
-  });
-  bot.api = { zpwServiceMap: { group: ["http://127.0.0.1:9/api/group"] } };
-  bot.startGroupPreconnect();
-  await assert.rejects(bot.httpFetch("http://127.0.0.1:9/api/group/sendmsg", {
-    method: "POST",
-    proxy: "http://127.0.0.1:9",
-    signal: AbortSignal.timeout(500),
-  }));
-  assert.equal(transportUsed, false);
-  bot.stopGroupPreconnect();
-});
-
-test("does not touch background warm-ups on the reply hot path", () => {
+test("preconnects the group origin immediately before dispatch", () => {
   const actions = [];
   const bot = new ZaloReplyBot({
     allowedGroupIds: new Set(["group-1"]),
     replyText: "Ok",
     sessionFile: "unused",
-    createGroupTransport: () => ({
-      start: () => actions.push("start"),
-      close: () => actions.push("close"),
-      handles: () => false,
-      request: () => {},
-    }),
+    preconnect: (origin) => actions.push(`preconnect:${origin}`),
   });
   bot.api = {
     zpwServiceMap: { group: ["https://group.example.test/api/group"] },
@@ -353,10 +311,15 @@ test("does not touch background warm-ups on the reply hot path", () => {
       return Promise.resolve();
     },
   };
-  bot.startGroupPreconnect();
-  bot.onMessage(makeMessage({ data: { msgId: "hot-path", content: "Bac Ninh di Ha Noi 200k" } }));
-  assert.deepEqual(actions, ["start", "send"]);
-  bot.stopGroupPreconnect();
+
+  bot.onMessage(makeMessage({
+    data: {
+      msgId: "preconnect-before-send",
+      content: "0 - 20p 1k ghep tpbn - my dinh 200k",
+    },
+  }));
+
+  assert.deepEqual(actions, ["preconnect:https://group.example.test", "send"]);
 });
 
 test("reuses a native Bun HTTP Keep-Alive connection for sequential requests", async () => {
@@ -484,20 +447,16 @@ test("times out a stalled Zalo keep-alive request", async () => {
 
 test("reconnects after the Zalo listener closes permanently", async () => {
   let loginCalls = 0;
-  const transports = [];
+  const preconnectedOrigins = [];
   const bot = new ZaloReplyBot({
     allowedGroupIds: new Set(),
     replyText: "Ok",
     sessionFile: "unused",
     keepAliveIntervalMs: 100000,
     groupPreconnectIntervalMs: 100000,
+    preconnect: (origin) => preconnectedOrigins.push(origin),
     reconnectBaseDelayMs: 1,
     reconnectMaxDelayMs: 1,
-    createGroupTransport: ({ origin }) => {
-      const transport = { origin, closed: false, start: () => {}, close: () => { transport.closed = true; }, handles: () => false };
-      transports.push(transport);
-      return transport;
-    },
   });
   bot.login = async () => {
     loginCalls += 1;
@@ -518,13 +477,11 @@ test("reconnects after the Zalo listener closes permanently", async () => {
   await bot.start();
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(loginCalls, 2);
-  assert.deepEqual(transports.map((item) => item.origin), [
+  assert.deepEqual(preconnectedOrigins, [
     "https://group-1.example.test",
     "https://group-2.example.test",
   ]);
-  assert.equal(transports[0].closed, true);
   await bot.stop();
-  assert.equal(transports[1].closed, true);
 });
 
 test("retries when initial Zalo login fails", async () => {
