@@ -790,3 +790,32 @@ test("reconnects Zalo immediately instead of waiting for backoff when accepting 
   assert.equal(bot.reconnectTimer, null);
   assert.equal(bot.reconnectAttempts, 0);
 });
+
+test("ranks replies quoting the accepted order by Zalo server time", () => {
+  const events = [];
+  const bot = new ZaloReplyBot({
+    allowedGroupIds: new Set(["group-1"]),
+    replyText: "Ok",
+    sessionFile: "unused",
+    emit: (event, payload) => { if (event === "race") events.push(payload); },
+  });
+  const original = { data: { msgId: "900", cliMsgId: "901", ts: "1000" } };
+  bot.startRaceWatch({ groupId: "group-1", message: original, receivedWallMs: 1040, networkMs: 12 });
+  const reply = (name, ts, isSelf = false) => ({
+    threadId: "group-1", type: ThreadType.Group, isSelf,
+    data: { msgId: `r-${ts}`, dName: name, ts: String(ts), content: "Ok", quote: { globalMsgId: 900, cliMsgId: 901 } },
+  });
+  bot.onMessage(reply("Rival B", 1090));
+  bot.onMessage(reply("me", 1075, true));
+  bot.onMessage(reply("Rival A", 1060));
+  bot.onMessage({ threadId: "group-1", type: ThreadType.Group, isSelf: false, data: { msgId: "x", ts: "1050", content: "Ok" } });
+  clearTimeout(bot.raceWatch.timer);
+  bot.reportRace(bot.raceWatch);
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].receiveLagMs, 40);
+  assert.equal(events[0].selfRank, 2);
+  assert.deepEqual(events[0].rows.map((row) => [row.name, row.afterMs]), [
+    ["Rival A", 60], ["BẠN (bot)", 75], ["Rival B", 90],
+  ]);
+});

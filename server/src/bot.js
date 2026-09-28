@@ -11,6 +11,7 @@ import {
   summarizePriorityRoutes,
 } from "./priority-routes.js";
 import { config } from "./config.js";
+import { FastGroupSender, verifyAgainstCryptoJs } from "./fast-sender.js";
 
 const getMessageId = (message) =>
   message.data?.msgId ?? message.data?.cliMsgId ?? message.data?.globalMsgId;
@@ -169,6 +170,72 @@ export class ZaloReplyBot {
       }
     }
     this.groupNames = new Map();
+    this.raceWatch = null;
+    this.fastSender = null;
+    this.raceWindowMs = 20000;
+  }
+
+  // Theo dõi "cuộc đua": sau khi gửi Ok, gom mọi tin quote đúng tin khách (của mình và đối thủ)
+  // trong raceWindowMs rồi in bảng xếp hạng theo giờ máy chủ Zalo (data.ts).
+  startRaceWatch({ groupId, message, receivedWallMs, networkMs, dispatchMs = null, sendPath = null }) {
+    const data = message?.data ?? {};
+    const originalTs = Number(data.ts) || null;
+    if (this.raceWatch?.timer) clearTimeout(this.raceWatch.timer);
+    const watch = {
+      groupId,
+      msgId: String(data.msgId ?? ""),
+      cliMsgId: String(data.cliMsgId ?? ""),
+      originalTs,
+      receivedWallMs,
+      networkMs,
+      dispatchMs,
+      sendPath,
+      entries: [],
+      timer: null,
+    };
+    watch.timer = setTimeout(() => this.reportRace(watch), this.raceWindowMs);
+    watch.timer.unref?.();
+    this.raceWatch = watch;
+  }
+
+  trackRace(message) {
+    const watch = this.raceWatch;
+    if (String(message.threadId) !== watch.groupId) return;
+    const quote = message.data?.quote;
+    if (!quote) return;
+    const matches = (watch.msgId && String(quote.globalMsgId) === watch.msgId)
+      || (watch.cliMsgId && String(quote.cliMsgId) === watch.cliMsgId);
+    if (!matches) return;
+    watch.entries.push({
+      name: message.isSelf ? "BẠN (bot)" : (getSenderName(message) || getSenderId(message) || "?"),
+      self: Boolean(message.isSelf),
+      ts: Number(message.data?.ts) || null,
+      arrivedWallMs: Date.now(),
+    });
+  }
+
+  reportRace(watch) {
+    if (this.raceWatch === watch) this.raceWatch = null;
+    const base = watch.originalTs;
+    const rows = watch.entries
+      .filter((entry) => entry.ts)
+      .sort((left, right) => left.ts - right.ts);
+    const receiveLagMs = base ? watch.receivedWallMs - base : null;
+    const lines = rows.map((entry, index) =>
+      `  #${index + 1} ${entry.name}: +${base ? entry.ts - base : "?"} ms sau tin khách`);
+    const selfRank = rows.findIndex((entry) => entry.self) + 1;
+    console.log([
+      `[race] group=${watch.groupId} msg=${watch.msgId} nhận-trễ=${receiveLagMs ?? "?"} ms (giờ VPS - giờ Zalo) xử-lý=${watch.dispatchMs ?? "?"} ms gửi=${watch.networkMs} ms (${watch.sendPath ?? "?"}) hạng=${selfRank || "không thấy tin của bot"}/${rows.length}`,
+      ...lines,
+    ].join("\n"));
+    this.emit("race", {
+      groupId: watch.groupId,
+      messageId: watch.msgId,
+      receiveLagMs,
+      networkMs: watch.networkMs,
+      selfRank: selfRank || null,
+      rows: rows.map((entry) => ({ name: entry.name, self: entry.self, afterMs: base ? entry.ts - base : null })),
+    });
   }
 
   snapshot() {
@@ -210,6 +277,8 @@ export class ZaloReplyBot {
       const zalo = new Zalo({
         logging: false,
         checkUpdate: false,
+        // Cần nhận lại tin của chính mình để đo thứ hạng trong báo cáo [race].
+        selfListen: true,
         polyfill: this.httpFetch,
         agent: config.proxyAgent,
       });
@@ -220,6 +289,9 @@ export class ZaloReplyBot {
       this.keepAliveInFlight = false;
       this.api = api;
       this.groupServiceOrigin = null;
+      this.fastSender?.dispose();
+      this.fastSender = null;
+      void this.setupFastSender(api);
       api.listener.on("message", (message) => this.onMessage(message));
       api.listener.on("connected", () => {
         if (api !== this.api) return;
@@ -255,6 +327,28 @@ export class ZaloReplyBot {
       this.publish();
       this.scheduleReconnect();
       throw error;
+    }
+  }
+
+  async setupFastSender(api) {
+    try {
+      const sender = new FastGroupSender({
+        api,
+        fetch: this.httpFetch,
+        proxy: this.sendProxy,
+        requestTimeoutMs: this.httpRequestTimeoutMs,
+      });
+      await sender.init();
+      const check = await verifyAgainstCryptoJs(sender);
+      if (api !== this.api || this.shuttingDown) {
+        sender.dispose();
+        return;
+      }
+      sender.rehearse();
+      this.fastSender = sender;
+      console.log(`Fast sender ready (${check.verified ? "đã so khớp mã hóa với crypto-js" : check.reason})`);
+    } catch (error) {
+      console.warn("Fast sender disabled, dùng api.sendMessage của zca-js:", error.message);
     }
   }
 
@@ -356,6 +450,9 @@ export class ZaloReplyBot {
     const warmUp = () => {
       this.preconnectGroupTransport();
       void this.warmGroupConnections();
+      try {
+        this.fastSender?.rehearse();
+      } catch (_) { }
     };
 
     this.groupPreconnectTimer = setInterval(warmUp, this.groupPreconnectIntervalMs);
@@ -393,6 +490,8 @@ export class ZaloReplyBot {
     this.reconnectTimer = null;
     this.stopKeepAlive();
     this.stopGroupPreconnect();
+    this.fastSender?.dispose();
+    this.fastSender = null;
 
     const api = this.api;
     this.api = null;
@@ -489,10 +588,12 @@ export class ZaloReplyBot {
 
   onMessage(message) {
     const receivedAt = performance.now();
-    const receivedAtIso = new Date().toISOString();
+    const receivedWallMs = Date.now();
+    const receivedAtIso = new Date(receivedWallMs).toISOString();
     this.stats.received += 1;
     const threadId = String(message.threadId);
 
+    if (this.raceWatch) this.trackRace(message);
     if (message.isSelf || message.type !== ThreadType.Group) return;
     if (!this.allowedGroupIds.has(threadId)) return;
 
@@ -606,11 +707,18 @@ export class ZaloReplyBot {
     };
 
     let sendPromise;
+    let sendPath = "zca";
     try {
       // Nền đã giữ nóng groupServiceOrigin mỗi groupPreconnectIntervalMs; chỉ tự gọi lại ở
       // đây khi origin chưa từng được xác định (tin đầu tiên hoặc vừa reconnect).
       if (!this.groupServiceOrigin) this.preconnectGroupTransport();
-      sendPromise = Promise.resolve(this.api.sendMessage(payload, message.threadId, ThreadType.Group));
+      const fastSender = this.fastSender;
+      if (fastSender && fastSender.canSend(payload)) {
+        sendPath = "fast";
+        sendPromise = fastSender.send(payload, message.threadId);
+      } else {
+        sendPromise = Promise.resolve(this.api.sendMessage(payload, message.threadId, ThreadType.Group));
+      }
     } catch (error) {
       reportFailure(error);
       return;
@@ -626,6 +734,7 @@ export class ZaloReplyBot {
         this.stats.sent += 1;
         this.stats.lastNetworkMs = networkMs;
         this.stats.lastLatencyMs = latencyMs;
+        this.stats.lastSendPath = sendPath;
         const order = {
           eventId: randomUUID(),
           messageId: decisionBase.messageId,
@@ -646,9 +755,11 @@ export class ZaloReplyBot {
           networkMs,
           totalMs: latencyMs,
           latencyMs,
+          sendPath,
           status: "success",
         };
         this.orderInFlight = false;
+        this.startRaceWatch({ groupId: threadId, message, receivedWallMs, networkMs, dispatchMs, sendPath });
         this.activeOrder = order;
         this.enabled = false;
         this.configUpdatedAt = order.sentAt;
@@ -666,7 +777,7 @@ export class ZaloReplyBot {
       .catch(reportFailure);
 
     if (this.hotPathLogging) {
-      console.log(`Dispatched reply for group ${threadId} in ${dispatchMs} ms`);
+      console.log(`Dispatched reply for group ${threadId} in ${dispatchMs} ms via ${sendPath}`);
     }
   }
 
