@@ -92,6 +92,7 @@ export class ZaloReplyBot {
     hotPathLogging = false,
     keepAliveIntervalMs = 5000,
     groupPreconnectIntervalMs = 1000,
+    groupWarmConnections = 2,
     keepAliveRequestTimeoutMs = 5000,
     httpRequestTimeoutMs = 30000,
     reconnectBaseDelayMs = 1000,
@@ -118,7 +119,11 @@ export class ZaloReplyBot {
     this.groupPreconnectTimer = null;
     this.groupServiceOrigin = null;
     this.groupWarmUpInFlight = false;
-    this.lastGroupActivityAt = 0;
+    // Số kết nối TCP/TLS luôn giữ sẵn tới host gửi tin nhóm. >= 2 để khi một kết nối đang bận
+    // warm-up thì lệnh gửi thật vẫn có kết nối nóng khác để dùng ngay.
+    this.groupWarmConnections = Math.max(1, Math.floor(Number(groupWarmConnections) || 1));
+    // Phải dùng đúng proxy mà zca-js dùng khi gửi tin, nếu không pool kết nối sẽ khác nhau.
+    this.sendProxy = config.proxyAgent?.proxy?.href;
     this.preconnect = preconnect;
     this.reconnectBaseDelayMs = reconnectBaseDelayMs;
     this.reconnectMaxDelayMs = reconnectMaxDelayMs;
@@ -222,6 +227,7 @@ export class ZaloReplyBot {
         this.qrAvailable = false;
         this.status = "online";
         this.publish();
+        void this.warmGroupConnections();
         void this.refreshGroupNames();
       });
       api.listener.on("disconnected", () => {
@@ -314,31 +320,65 @@ export class ZaloReplyBot {
     }
   }
 
+  async warmGroupConnections() {
+    const origin = this.groupServiceOrigin;
+    if (this.groupWarmUpInFlight || !origin || this.orderInFlight) return;
+
+    this.groupWarmUpInFlight = true;
+    const startedAt = performance.now();
+    try {
+      const proxyOptions = this.sendProxy ? { proxy: this.sendProxy } : {};
+      await Promise.allSettled(Array.from({ length: this.groupWarmConnections }, () =>
+        this.httpFetch(`${origin}/`, {
+          method: "HEAD",
+          ...proxyOptions,
+          signal: AbortSignal.timeout(2500),
+        })));
+      const warmUpMs = Number((performance.now() - startedAt).toFixed(1));
+      this.stats.lastWarmUpMs = warmUpMs;
+      this.stats.lastWarmUpAt = new Date().toISOString();
+      if (this.hotPathLogging && warmUpMs > 150) {
+        console.warn(`Zalo group warm-up took ${warmUpMs} ms (có thể vừa bắt tay TCP/TLS lại)`);
+      }
+    } catch (error) {
+      if (this.hotPathLogging) console.warn("Zalo group warm-up failed:", error.message);
+    } finally {
+      this.groupWarmUpInFlight = false;
+    }
+  }
+
   startGroupPreconnect() {
     if (this.groupPreconnectTimer || !this.preconnectGroupTransport()) return;
 
-    const warmUp = async () => {
+    // Luôn giữ nóng, KHÔNG tạm dừng khi nhóm có nhiều tin nhắn đến: tin nhận về đi qua WebSocket,
+    // không làm nóng kết nối HTTP gửi tin. Trước đây cứ có tin đến trong 3 giây là bỏ warm-up,
+    // nhóm đông thì warm-up gần như không chạy -> kết nối gửi bị nguội sau khi ấn "Đã xử lý".
+    const warmUp = () => {
       this.preconnectGroupTransport();
-      if (this.groupWarmUpInFlight || !this.groupServiceOrigin) return;
-
-      // Option A1 (Adaptive): Tạm dừng nếu vừa có hoạt động nhắn tin trong 3 giây qua
-      if (performance.now() - this.lastGroupActivityAt < 3000) return;
-
-      this.groupWarmUpInFlight = true;
-      try {
-        await this.httpFetch(`${this.groupServiceOrigin}/`, {
-          method: "HEAD",
-          signal: AbortSignal.timeout(2500),
-        });
-      } catch (error) {
-        if (this.hotPathLogging) console.warn("Zalo group warm-up failed:", error.message);
-      } finally {
-        this.groupWarmUpInFlight = false;
-      }
+      void this.warmGroupConnections();
     };
 
     this.groupPreconnectTimer = setInterval(warmUp, this.groupPreconnectIntervalMs);
     this.groupPreconnectTimer.unref?.();
+  }
+
+  // Gọi khi bật nhận đơn lại (ấn "Đã xử lý" hoặc Bắt đầu): làm nóng ngay, không chờ nhịp kế tiếp;
+  // nếu Zalo đang chờ backoff để kết nối lại thì bỏ chờ và kết nối lại ngay.
+  ensureHot() {
+    if (this.shuttingDown) return;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+      this.reconnectAttempts = 0;
+      this.start().catch((error) => console.error("Zalo reconnect failed:", error.message));
+      return;
+    }
+    if (!this.api) return;
+    this.preconnectGroupTransport();
+    void this.warmGroupConnections();
+    if (!this.keepAliveInFlight) {
+      Promise.resolve(this.api.keepAlive?.()).catch(() => { });
+    }
   }
 
   stopGroupPreconnect() {
@@ -449,7 +489,6 @@ export class ZaloReplyBot {
 
   onMessage(message) {
     const receivedAt = performance.now();
-    this.lastGroupActivityAt = receivedAt;
     const receivedAtIso = new Date().toISOString();
     this.stats.received += 1;
     const threadId = String(message.threadId);
@@ -632,8 +671,10 @@ export class ZaloReplyBot {
   }
 
   setEnabled(enabled) {
+    const wasEnabled = this.enabled;
     this.enabled = Boolean(enabled) && !this.activeOrder;
     this.configUpdatedAt = new Date().toISOString();
+    if (this.enabled && !wasEnabled) this.ensureHot();
     this.publish();
   }
 
@@ -657,10 +698,12 @@ export class ZaloReplyBot {
     updatedAt = new Date().toISOString(),
   }) {
     if (!["all", "priority"].includes(mode)) throw new Error("Invalid acceptance mode");
+    const wasEnabled = this.enabled;
     this.activeOrder = activeOrder && typeof activeOrder === "object" ? activeOrder : null;
     this.enabled = Boolean(enabled) && !this.activeOrder;
     this.priorityOnly = mode === "priority";
     this.configUpdatedAt = updatedAt;
+    if (this.enabled && !wasEnabled) this.ensureHot();
     this.publish();
   }
 

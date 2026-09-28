@@ -70,6 +70,7 @@ export const config = {
   hotPathLogging: process.env.HOT_PATH_LOGGING === "true",
   keepAliveIntervalMs: Math.max(5000, Number(process.env.KEEP_ALIVE_INTERVAL_MS) || 5000),
   groupPreconnectIntervalMs: Math.max(1000, Number(process.env.GROUP_PRECONNECT_INTERVAL_MS) || 1000),
+  groupWarmConnections: Math.min(4, Math.max(1, Number(process.env.GROUP_WARM_CONNECTIONS) || 2)),
   botState,
   botStateFile,
   maxSocketConnections: Math.max(1, Number(process.env.MAX_SOCKET_CONNECTIONS) || 5),

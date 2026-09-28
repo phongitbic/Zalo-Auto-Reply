@@ -723,3 +723,70 @@ test("a Redis outage changes infrastructure status but never changes PRIORITY to
   assert.equal(bot.snapshot().operationMode, "PRIORITY");
   assert.equal(bot.snapshot().redis.connected, false);
 });
+
+test("keeps warming the group send connection even while group messages keep arriving", async () => {
+  const warmed = [];
+  const bot = new ZaloReplyBot({
+    allowedGroupIds: new Set(["group-1"]),
+    replyText: "Ok",
+    sessionFile: "unused",
+    enabled: false,
+    groupWarmConnections: 2,
+    preconnect: () => {},
+  });
+  bot.httpFetch = (url, options) => { warmed.push(`${options.method} ${url}`); return Promise.resolve(); };
+  bot.api = { zpwServiceMap: { group: ["https://group.example.test/api/group"] } };
+  bot.preconnectGroupTransport();
+
+  bot.onMessage(makeMessage({ data: { msgId: "busy-1", content: "Don khach tai Thu Duc" } }));
+  await bot.warmGroupConnections();
+
+  assert.deepEqual(warmed, [
+    "HEAD https://group.example.test/",
+    "HEAD https://group.example.test/",
+  ]);
+});
+
+test("warms the send connection immediately when an order is marked done", () => {
+  const warmed = [];
+  const bot = new ZaloReplyBot({
+    allowedGroupIds: new Set(["group-1"]),
+    replyText: "Ok",
+    sessionFile: "unused",
+    activeOrder: { messageId: "m-1" },
+    groupWarmConnections: 1,
+    preconnect: () => {},
+  });
+  bot.httpFetch = (url) => { warmed.push(url); return Promise.resolve(); };
+  bot.api = {
+    zpwServiceMap: { group: ["https://group.example.test/api/group"] },
+    keepAlive: () => Promise.resolve(),
+  };
+  assert.equal(bot.enabled, false);
+
+  bot.setControl({ enabled: true, mode: "all", activeOrder: null });
+
+  assert.equal(bot.enabled, true);
+  assert.deepEqual(warmed, ["https://group.example.test/"]);
+});
+
+test("reconnects Zalo immediately instead of waiting for backoff when accepting orders again", () => {
+  let starts = 0;
+  const bot = new ZaloReplyBot({
+    allowedGroupIds: new Set(),
+    replyText: "Ok",
+    sessionFile: "unused",
+    enabled: false,
+    reconnectBaseDelayMs: 60000,
+    reconnectMaxDelayMs: 60000,
+  });
+  bot.start = () => { starts += 1; return Promise.resolve(); };
+  bot.scheduleReconnect();
+  assert.ok(bot.reconnectTimer);
+
+  bot.setEnabled(true);
+
+  assert.equal(starts, 1);
+  assert.equal(bot.reconnectTimer, null);
+  assert.equal(bot.reconnectAttempts, 0);
+});
